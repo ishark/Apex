@@ -1,0 +1,78 @@
+private Collection<JSONObject> getPortTypeInfo(String clazzName,
+      Map<Type, Type> typeReplacement) throws JSONException {
+    TypeGraphVertex tgv = typeGraph.get(clazzName);
+
+    if (tgv == null) {
+      return null;
+    }
+
+    Collection<JSONObject> portInfo = new ArrayList<JSONObject>();
+    List<CompactFieldNode> ports = new ArrayList<CompactFieldNode>();
+    getAllPorts(tgv, ports);
+
+    for (CompactFieldNode port : ports) {
+      Type fieldType = port.getFieldSignatureNode().getFieldType();
+      Type t = fieldType;
+      if (fieldType instanceof ParameterizedTypeNode) {
+        // TODO: Right now getPortInfo assumes a single parameterized type
+        t = ((ParameterizedTypeNode) fieldType).getActualTypeArguments()[0];
+      } else {
+        // TODO: Check behavior for Ports not using Default Input/output ports
+        TypeGraphVertex portVertex = typeGraph.get(port.getDescription());
+        System.out.println("port name = " + port.getDescription());
+        // System.out.println("port name = " + fieldType.getDescriptor());
+
+        t = findTypeArgument(portVertex, typeReplacement);
+        LOG.debug("Field is of type {}", fieldType.getClass());
+      }
+
+      JSONObject meta = new JSONObject();
+      try {
+        meta.put("name", port.getName());
+        setTypes(meta, t, typeReplacement);
+        portInfo.add(meta);
+      } catch (Exception e) {
+        DTThrowable.wrapIfChecked(e);
+      }
+    }
+
+    return portInfo;
+  }
+
+  public static Type getParameterizedTypeArgument(Type type) {
+    if (type instanceof ParameterizedTypeNode) {
+      return ((ParameterizedTypeNode) type).getActualTypeArguments()[0];
+    }
+    return null;
+  }
+
+  private Type findTypeArgument(TypeGraphVertex tgv,
+      Map<Type, Type> typeReplacement) {
+    if (tgv == null)
+      return null;
+    ClassSignatureVisitor csv = tgv.getClassNode().getCsv();
+    Type superC = csv.getSuperClass();
+
+    addReplacement(superC, typeReplacement);
+    Type t = getParameterizedTypeArgument(superC);
+    if (t != null) {
+      return t;
+    }
+
+    if (csv.getInterfaces() != null) {
+      for (Type it : csv.getInterfaces()) {
+        addReplacement(it, typeReplacement);
+        t = getParameterizedTypeArgument(it);
+        if (t != null) {
+          return t;
+        }
+      }
+    }
+
+    for (TypeGraphVertex ancestor : tgv.ancestors) {
+      return findTypeArgument(ancestor, typeReplacement);
+    }
+
+    return null;
+  }
+

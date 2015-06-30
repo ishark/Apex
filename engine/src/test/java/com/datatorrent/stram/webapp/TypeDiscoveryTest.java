@@ -27,7 +27,6 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import com.google.common.collect.Maps;
-
 import com.datatorrent.common.util.BaseOperator;
 import com.datatorrent.api.DefaultInputPort;
 import com.datatorrent.api.DefaultOutputPort;
@@ -45,6 +44,26 @@ public class TypeDiscoveryTest
     }
   }
 
+  private static class A<K> {
+
+  }
+
+  private static class B<T extends Number> extends A {
+
+  }
+
+  private static class GenericOutputPort extends DefaultOutputPort<B<Number>> {
+    public GenericOutputPort(Operator operator) {
+      super();
+    }
+  }
+
+  private static class GenericSubClassOutputPort extends GenericOutputPort {
+    public GenericSubClassOutputPort(Operator operator) {
+      super(operator);
+    }
+  }
+
   static class ParameterizedOperator<T0, T1 extends Map<String, ? extends T0>, T2 extends Number> extends BaseOperator implements GenericInterface<T1> {
     final InputPort<T1> inputT1 = new DefaultInputPort<T1>() {
       @Override
@@ -55,6 +74,7 @@ public class TypeDiscoveryTest
     final OutputPort<Number> outportNumberParam = new DefaultOutputPort<Number>();
     final StringOutputPort outportString = new StringOutputPort(this);
     final OutputPort<List<T0>> outportList = new DefaultOutputPort<List<T0>>();
+    final GenericSubClassOutputPort outClassObject = new GenericSubClassOutputPort(this);
   }
 
   static class ExtendsParameterizedOperator extends ParameterizedOperator<Number, Map<String, Double>, Double>
@@ -81,16 +101,25 @@ public class TypeDiscoveryTest
   @Test
   public void testTypeDiscovery() throws Exception
   {
-    TypeDiscoverer td = new TypeDiscoverer();
-    JSONArray json = td.getPortTypes(ExtendsParameterizedOperator.class);
-    System.out.println(json.toString(2));
-    System.out.println(td.typeArguments);
+    String[] classFilePath = OperatorDiscoveryTest.getClassFileInClasspath();
+    OperatorDiscoverer od = new OperatorDiscoverer(classFilePath);
+    od.buildTypeGraph();
+    
+    JSONObject Desc = od.describeClassByASM(ExtendsParameterizedOperator.class.getName());
+    JSONArray json = Desc.getJSONArray("portTypeInfo");
 
+    System.out.println(json);
     ObjectMapper mapper = new ObjectMapper();
     //List<?> l = mapper.convertValue(json, List.class);
     JsonNode root = mapper.readTree(json.toString(2));
     String val = root.get(0).path("name").asText();
     Assert.assertEquals("port name", "inputT1", val);
+
+    val = root.get(3).path("name").asText();
+    Assert.assertEquals("port name", "outportString", val);
+
+    val = root.get(3).path("type").asText();
+    Assert.assertEquals("outportList type", "java.lang.String", val);
 
     val = root.get(4).path("name").asText();
     Assert.assertEquals("port name", "outportList", val);
@@ -100,11 +129,20 @@ public class TypeDiscoveryTest
 
     val = root.get(4).path("typeArgs").get(0).path("type").asText();
     Assert.assertEquals("outportList type", "java.lang.Number", val);
+
+    val = root.get(5).path("name").asText();
+    Assert.assertEquals("port name", "outClassObject", val);
+
+    val = root.get(5).path("type").asText();
+    Assert.assertEquals("outportList type", "com.datatorrent.stram.webapp.TypeDiscoveryTest$B", val);
+
+    val = root.get(5).path("typeArgs").get(0).path("type").asText();
+    Assert.assertEquals("outportList type", "java.lang.Number", val);
   }
 
   static class ParameterizedTypeOperator<T> extends BaseOperator
   {
-    public transient final OutputPort<T> output = new DefaultOutputPort<T>();
+    final OutputPort<T> output = new DefaultOutputPort<T>();
   }
 
   static class StringParameterOperator extends ParameterizedTypeOperator<String>
@@ -114,11 +152,15 @@ public class TypeDiscoveryTest
   @Test
   public void testTypeDiscovery2() throws Exception
   {
-    TypeDiscoverer td = new TypeDiscoverer();
-    JSONArray json = td.getPortTypes(StringParameterOperator.class);
-    //System.out.println(json.toString(2));
-    //System.out.println(td.typeArguments);
-
+    String[] classFilePath = OperatorDiscoveryTest.getClassFileInClasspath();
+    OperatorDiscoverer od = new OperatorDiscoverer(classFilePath);
+    od.buildTypeGraph();
+    
+    JSONObject Desc = od.describeClassByASM(StringParameterOperator.class.getName());
+    System.out.println(Desc);
+    JSONArray json = Desc.getJSONArray("portTypeInfo");
+    System.out.println(json);
+    
     ObjectMapper mapper = new ObjectMapper();
     JsonNode root = mapper.readTree(json.toString(2));
     String val = root.get(0).path("name").asText();
@@ -129,20 +171,27 @@ public class TypeDiscoveryTest
   }
 
 
-  static class SubClass<T> extends ParameterizedTypeOperator<T>
+  static class SubClass<K> extends ParameterizedTypeOperator<K>
   {
   }
 
   static class SubSubClass extends SubClass<Map<String, Object>>
   {
+    public String trial;
   }
 
   @Test
   public void testTypeDiscoveryMultiLevel() throws Exception
   {
-    TypeDiscoverer td = new TypeDiscoverer();
-    JSONArray json = td.getPortTypes(SubSubClass.class);
-
+    String[] classFilePath = OperatorDiscoveryTest.getClassFileInClasspath();
+    OperatorDiscoverer od = new OperatorDiscoverer(classFilePath);
+    od.buildTypeGraph();
+    
+    JSONObject Desc = od.describeClassByASM(SubSubClass.class.getName());
+    System.out.println(Desc);
+    JSONArray json = Desc.getJSONArray("portTypeInfo");
+    System.out.println(json);
+   
     ObjectMapper mapper = new ObjectMapper();
     JsonNode root = mapper.readTree(json.toString(2));
     String val = root.get(0).path("name").asText();
@@ -155,7 +204,7 @@ public class TypeDiscoveryTest
     Assert.assertEquals("map key type", "java.lang.String", val);
     val = root.get(0).path("typeArgs").get(1).path("type").asText();
     Assert.assertEquals("map value type", "java.lang.Object", val);
-
+    
   }
 
   @Test
