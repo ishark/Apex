@@ -38,6 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.datatorrent.api.Component;
+import com.datatorrent.api.InputOperator;
 import com.datatorrent.api.Operator;
 import com.datatorrent.netlet.util.DTThrowable;
 import com.datatorrent.stram.webapp.asm.ClassNodeType;
@@ -74,6 +75,22 @@ public class TypeGraph
     Operator.class.getName().replace('.', '/'),
     Component.class.getName().replace('.', '/')};
 
+
+  public boolean isAncestor(String parentClassName, String subClassName)
+  {
+    TypeGraphVertex parentVertex = typeGraph.get(parentClassName);
+    TypeGraphVertex classVertex = typeGraph.get(subClassName);
+
+    if(parentVertex == null || classVertex == null)
+      return false;
+
+    return TypeGraph.isAncestor(parentVertex, classVertex);
+  }
+
+  public TypeGraphVertex getTypeGraphVertex(String className)
+  {
+    return typeGraph.get(className);
+  }
 
   private static boolean isAncestor(TypeGraphVertex typeTgv, TypeGraphVertex tgv)
   {
@@ -350,6 +367,22 @@ public class TypeGraph
     return typeGraph.size();
   }
 
+  public Set<String> getAllInitializableOperators()
+  {
+    TypeGraphVertex tgv = typeGraph.get(Operator.class.getName());
+    if (tgv == null) {
+      return null;
+    }
+    Set<String> result = new TreeSet<String>();
+    for (TypeGraphVertex node : tgv.allInitialiazableDescendants) {
+      if ((isAncestor(InputOperator.class.getName(), node.typeName) || !getAllInputPorts(node).isEmpty())) {
+        result.add(node.typeName);
+      }
+    }
+
+    return result;
+  }
+
   public Set<String> getDescendants(String fullClassName)
   {
     Set<String> result = new HashSet<String>();
@@ -438,6 +471,10 @@ public class TypeGraph
       this.classNode = classNode;
     }
 
+    public Set<TypeGraphVertex> getAncestors()
+    {
+      return ancestors;
+    }
     public int numberOfInitializableDescendants()
     {
       return allInitialiazableDescendants.size() + (isInitializable() ? 1 : 0);
@@ -449,7 +486,7 @@ public class TypeGraph
       this.jarName = jarName;
     }
 
-    private boolean isInitializable()
+    public boolean isInitializable()
     {
       return (isPublicConcrete() && classNode.getInitializableConstructor() != null) || UI_TYPE.getEnumFor(this) != null;
     }
@@ -666,7 +703,14 @@ public class TypeGraph
 
   public List<CompactFieldNode> getAllInputPorts(String clazzName) {
     TypeGraphVertex tgv = typeGraph.get(clazzName);
+    return getAllInputPorts(tgv);
+  }
+
+  public List<CompactFieldNode> getAllInputPorts(TypeGraphVertex tgv)
+  {
     List<CompactFieldNode> ports = new ArrayList<CompactFieldNode>();
+    if (tgv == null)
+      return ports;
     TypeGraphVertex portVertex = typeGraph.get(Operator.InputPort.class
         .getName());
     getAllPortsWithAncestor(portVertex, tgv, ports);
@@ -676,6 +720,7 @@ public class TypeGraph
         return a.getName().compareTo(b.getName());
       }
     });
+
     return ports;
   }
 

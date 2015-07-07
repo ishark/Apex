@@ -15,15 +15,14 @@
  */
 package com.datatorrent.stram.webapp;
 
-import com.datatorrent.api.InputOperator;
 import com.datatorrent.api.Operator;
-import com.datatorrent.api.annotation.*;
 import com.datatorrent.netlet.util.DTThrowable;
+import com.datatorrent.stram.util.ObjectMapperFactory;
 import com.datatorrent.stram.webapp.TypeDiscoverer.UI_TYPE;
+import com.datatorrent.stram.webapp.TypeGraph.TypeGraphVertex;
 import com.datatorrent.stram.webapp.asm.CompactAnnotationNode;
 import com.datatorrent.stram.webapp.asm.CompactFieldNode;
 import com.google.common.base.Predicate;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
@@ -42,10 +41,11 @@ import java.util.regex.Pattern;
 
 import javax.xml.parsers.*;
 
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.text.WordUtils;
+import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jettison.json.*;
-import org.objectweb.asm.tree.AnnotationNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xml.sax.Attributes;
@@ -61,16 +61,7 @@ import org.xml.sax.helpers.DefaultHandler;
  */
 public class OperatorDiscoverer
 {
-  private static class ClassComparator implements Comparator<Class<?>> {
-
-    @Override
-    public int compare(Class<?> a, Class<?> b)
-    {
-      return a.getName().compareTo(b.getName());
-    }
-
-  }
-  private final Set<Class<? extends Operator>> operatorClasses = new TreeSet<Class<? extends Operator>>(new ClassComparator());
+  private Set<String> operatorClassNames;
   private static final Logger LOG = LoggerFactory.getLogger(OperatorDiscoverer.class);
   private final List<String> pathsToScan = new ArrayList<String>();
   private final ClassLoader classLoader;
@@ -210,26 +201,23 @@ public class OperatorDiscoverer
     classLoader = new URLClassLoader(urls, ClassLoader.getSystemClassLoader());
   }
 
-
-  @SuppressWarnings({ "unchecked" })
   private void loadOperatorClass()
   {
     buildTypeGraph();
-    String operatorRoot = Operator.class.getName();
-    Set<String> allOperatorClasses = typeGraph.getDescendants(operatorRoot);
-//    ClassLoader cLoader = new URLClassLoader();
-    for (String opClassName : allOperatorClasses) {
-      try {
-        Class<?> clazz = classLoader.loadClass(opClassName);
-//        typeGraph.get(opClassName).loadedClass = clazz;
-        if (isInstantiableOperatorClass(clazz)) {
-          LOG.debug("Adding class {} as an operator", clazz.getName());
-          operatorClasses.add((Class<? extends Operator>)clazz);
-        }
-      }
-      catch (Throwable ex) {
-        LOG.warn("Class cannot be loaded: {} (error was {})", opClassName, ex.getMessage());
-      }
+    operatorClassNames =  typeGraph.getAllInitializableOperators();
+  }
+
+  @SuppressWarnings("unchecked")
+  public void addDefaultValue(String className, JSONObject oper)
+      throws Exception {
+    ObjectMapper defaultValueMapper = ObjectMapperFactory
+        .getOperatorValueSerializer();
+    Class<? extends Operator> clazz = (Class<? extends Operator>) classLoader
+        .loadClass(className);
+    if (clazz != null) {
+      Operator operIns = clazz.newInstance();
+      String s = defaultValueMapper.writeValueAsString(operIns);
+      oper.put("defaultValue", new JSONObject(s).get(className));
     }
   }
 
@@ -290,65 +278,50 @@ public class OperatorDiscoverer
     saxParserFactory.newSAXParser().parse(is, new JavadocSAXHandler());
   }
 
-  public static boolean isInstantiableOperatorClass(Class<?> clazz)
+  public Set<String> getOperatorClasses(String parent, String searchTerm) throws ClassNotFoundException
   {
-    int modifiers = clazz.getModifiers();
-    if (Modifier.isAbstract(modifiers) || Modifier.isInterface(modifiers) || !Operator.class.isAssignableFrom(clazz)){
-      return false;
-    }
-    // return true if it is an InputOperator or if it is an Operator with more than one InputPort
-    //TODO Use ASM later
-    return InputOperator.class.isAssignableFrom(clazz) || Iterables.any(Arrays.asList(clazz.getFields()), new Predicate<Field>() {
-      @Override
-      public boolean apply(Field f)
-      {
-        return Operator.InputPort.class.isAssignableFrom(f.getType());
-      }
-    });
-  }
-
-  public Set<Class<? extends Operator>> getOperatorClasses(String parent, String searchTerm) throws ClassNotFoundException
-  {
-    if (operatorClasses.isEmpty()) {
+    if (CollectionUtils.isEmpty(operatorClassNames)) {
       loadOperatorClass();
     }
-    Class<?> parentClass;
     if (parent == null) {
-      parentClass = Operator.class;
+      parent = Operator.class.getName();
     }
     else {
-      parentClass = classLoader.loadClass(parent);
-      if (!Operator.class.isAssignableFrom(parentClass)) {
+      if(!typeGraph.isAncestor(Operator.class.getName(), parent)) {
         throw new IllegalArgumentException("Argument must be a subclass of Operator class");
       }
     }
-    Set<Class<? extends Operator>> filteredClass = Sets.filter(operatorClasses, new Predicate<Class<? extends Operator>>() {
+
+    Set<String> filteredClass = Sets.filter(operatorClassNames, new Predicate<String>() {
 
       @Override
-      public boolean apply(Class<? extends Operator> c)
+      public boolean apply(String className)
       {
-        OperatorClassInfo oci = classInfo.get(c.getName());
+        OperatorClassInfo oci = classInfo.get(className);
         return oci == null || !oci.tags.containsKey("@omitFromUI");
       }
     });
-    if (searchTerm == null && parentClass == Operator.class) {
-      return Collections.unmodifiableSet(filteredClass);
+
+    if (searchTerm == null && parent == Operator.class.getName()) {
+      return filteredClass;
     }
+
     if (searchTerm != null) {
       searchTerm = searchTerm.toLowerCase();
     }
-    Set<Class<? extends Operator>> result = new HashSet<Class<? extends Operator>>();
-    for (Class<? extends Operator> clazz : filteredClass) {
-      if (parentClass.isAssignableFrom(clazz)) {
+
+    Set<String> result = new HashSet<String>();
+    for (String clazz : filteredClass) {
+      if (parent == Operator.class.getName() || typeGraph.isAncestor(parent, clazz)) {
         if (searchTerm == null) {
           result.add(clazz);
         }
         else {
-          if (clazz.getName().toLowerCase().contains(searchTerm)) {
+          if (clazz.toLowerCase().contains(searchTerm)) {
             result.add(clazz);
           }
           else {
-            OperatorClassInfo oci = classInfo.get(clazz.getName());
+            OperatorClassInfo oci = classInfo.get(clazz);
             if (oci != null) {
               if (oci.comment != null && oci.comment.toLowerCase().contains(searchTerm)) {
                 result.add(clazz);
@@ -372,7 +345,7 @@ public class OperatorDiscoverer
   @SuppressWarnings("unchecked")
   public Class<? extends Operator> getOperatorClass(String className) throws ClassNotFoundException
   {
-    if (operatorClasses.isEmpty()) {
+    if (CollectionUtils.isEmpty(operatorClassNames)) {
       loadOperatorClass();
     }
 
@@ -384,23 +357,24 @@ public class OperatorDiscoverer
     return (Class<? extends Operator>)clazz;
   }
 
-  public JSONObject describeOperator(Class<? extends Operator> clazz) throws Exception
+  public JSONObject describeOperator(String clazz) throws Exception
   {
-    if (OperatorDiscoverer.isInstantiableOperatorClass(clazz)) {
+    TypeGraphVertex tgv = typeGraph.getTypeGraphVertex(clazz);
+    if (tgv.isInitializable()) {
       JSONObject response = new JSONObject();
       JSONArray inputPorts = new JSONArray();
       JSONArray outputPorts = new JSONArray();
       // Get properties from ASM
 
-      JSONObject operatorDescriptor =  describeClassByASM(clazz.getName());
+      JSONObject operatorDescriptor =  describeClassByASM(clazz);
       JSONArray properties = operatorDescriptor.getJSONArray("properties");
 
       properties = enrichProperties(clazz, properties);
 
       JSONArray portTypeInfo = operatorDescriptor.getJSONArray("portTypeInfo");
 
-      List<CompactFieldNode> inputPortfields = typeGraph.getAllInputPorts(clazz.getName());
-      List<CompactFieldNode> outputPortfields = typeGraph.getAllOutputPorts(clazz.getName());
+      List<CompactFieldNode> inputPortfields = typeGraph.getAllInputPorts(clazz);
+      List<CompactFieldNode> outputPortfields = typeGraph.getAllOutputPorts(clazz);
 
 
       try {
@@ -424,13 +398,13 @@ public class OperatorDiscoverer
           outputPorts.put(outputPort);
         }
 
-        response.put("name", clazz.getName());
+        response.put("name", clazz);
         response.put("properties", properties);
         response.put(PORT_TYPE_INFO_KEY, portTypeInfo);
         response.put("inputPorts", inputPorts);
         response.put("outputPorts", outputPorts);
 
-        OperatorClassInfo oci = classInfo.get(clazz.getName());
+        OperatorClassInfo oci = classInfo.get(clazz);
 
         if (oci != null) {
           if (oci.comment != null) {
@@ -453,7 +427,7 @@ public class OperatorDiscoverer
           response.put("category", oci.tags.get("@category"));
           String displayName = oci.tags.get("@displayName");
           if (displayName == null) {
-            displayName = decamelizeClassName(clazz.getSimpleName());
+            displayName = decamelizeClassName(getSimpleName(clazz));
           }
           response.put("displayName", displayName);
           String tags = oci.tags.get("@tags");
@@ -468,8 +442,8 @@ public class OperatorDiscoverer
           if (doclink != null) {
             response.put("doclink", doclink + "?" + getDocName(clazz));
           }
-          else if (clazz.getName().startsWith("com.datatorrent.lib.") ||
-                  clazz.getName().startsWith("com.datatorrent.contrib.")) {
+          else if (clazz.startsWith("com.datatorrent.lib.") ||
+                  clazz.startsWith("com.datatorrent.contrib.")) {
             response.put("doclink", dtOperatorDoclinkPrefix + "?" + getDocName(clazz));
           }
         }
@@ -484,21 +458,23 @@ public class OperatorDiscoverer
     }
   }
 
-  private JSONObject setFieldAttributes(Class<? extends Operator> clazz,
+  private String getSimpleName(String className) {
+    String[] parts = className.split(Pattern.quote("."));
+    String simpleName = parts[parts.length - 1];
+    if (simpleName.contains("$")) {
+      parts = simpleName.split(Pattern.quote("$"));
+      simpleName = parts[parts.length - 1];
+    }
+    return simpleName;
+  }
+
+  private JSONObject setFieldAttributes(String clazz,
       CompactFieldNode field) throws JSONException {
     JSONObject port = new JSONObject();
     port.put("name", field.getName());
 
-    for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
-      OperatorClassInfo oci = classInfo.get(c.getName());
-      if (oci != null) {
-        String fieldDesc = oci.fields.get(field.getName());
-        if (fieldDesc != null) {
-          port.put("description", fieldDesc);
-          break;
-        }
-      }
-    }
+    TypeGraphVertex tgv = typeGraph.getTypeGraphVertex(clazz);
+    putFieldDescription(field, port, tgv);
 
     List<CompactAnnotationNode> annotations = field.getVisibleAnnotations();
     CompactAnnotationNode firstAnnotation;
@@ -514,7 +490,25 @@ public class OperatorDiscoverer
     return port;
   }
 
-  private JSONArray enrichProperties(Class<?> operatorClass, JSONArray properties) throws JSONException
+  private void putFieldDescription(CompactFieldNode field, JSONObject port,
+      TypeGraphVertex tgv) throws JSONException {
+
+    OperatorClassInfo oci = classInfo.get(tgv.typeName);
+    if (oci != null) {
+      String fieldDesc = oci.fields.get(field.getName());
+      if (fieldDesc != null) {
+        port.put("description", fieldDesc);
+        return;
+      }
+    }
+
+    for (TypeGraphVertex ancestor : tgv.getAncestors()) {
+      putFieldDescription(field, port, ancestor);
+    }
+
+  }
+
+  private JSONArray enrichProperties(String operatorClass, JSONArray properties) throws JSONException
   {
     JSONArray result = new JSONArray();
     for (int i = 0; i < properties.length(); i++) {
@@ -540,16 +534,24 @@ public class OperatorDiscoverer
     return result;
   }
 
-  private OperatorClassInfo getOperatorClassWithGetterSetter(Class<?> operatorClass, String setterName, String getterName) {
-    if(operatorClass != null && !Operator.class.isAssignableFrom(operatorClass)){
-      return null;
-    }
-    OperatorClassInfo oci = classInfo.get(operatorClass.getName());
+  private OperatorClassInfo getOperatorClassWithGetterSetter(String operatorClass, String setterName, String getterName) {
+    TypeGraphVertex tgv = typeGraph.getTypeGraphVertex(operatorClass);
+    return getOperatorClassWithGetterSetter(tgv, setterName, getterName);
+  }
+
+  private OperatorClassInfo getOperatorClassWithGetterSetter(TypeGraphVertex tgv, String setterName, String getterName) {
+    OperatorClassInfo oci = classInfo.get(tgv.typeName);
     if(oci != null && (oci.getMethods.containsKey(getterName) || oci.setMethods.containsKey(setterName))){
       return oci;
     } else {
-      return getOperatorClassWithGetterSetter(operatorClass.getSuperclass(), setterName, getterName);
+      if(tgv.getAncestors() != null) {
+        for(TypeGraphVertex ancestor : tgv.getAncestors()) {
+          return getOperatorClassWithGetterSetter(ancestor, setterName, getterName);
+        }
+      }
     }
+
+    return null;
   }
 
   public JSONObject describeClass(String clazzName) throws Exception
@@ -587,9 +589,9 @@ public class OperatorDiscoverer
   }
 
 
-  private static String getDocName(Class<?> clazz)
+  private static String getDocName(String clazz)
   {
-    return clazz.getName().replace('.', '/').replace('$', '.') + ".html";
+    return clazz.replace('.', '/').replace('$', '.') + ".html";
   }
 
   private JSONArray getClassProperties(Class<?> clazz, int level) throws IntrospectionException
