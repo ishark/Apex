@@ -19,6 +19,7 @@ import com.datatorrent.common.experimental.AppData;
 import java.io.*;
 import java.lang.reflect.*;
 import java.util.*;
+import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.validation.*;
@@ -385,10 +386,19 @@ public class LogicalPlan implements Serializable, DAG
     private final List<InputPortMeta> sinks = new ArrayList<InputPortMeta>();
     private OutputPortMeta source;
     private final String id;
+    private OperatorMeta persistOperatorForStream;
+    private InputPortMeta persistOperatorInputPort;
+    private Set<InputPortMeta> enableSinksForPersisting;
+    private String persistOperatorName;
+    public Map<InputPortMeta, OperatorMeta> sinkSpecificPersistOperatorMap;
+    public Map<InputPortMeta, InputPortMeta> sinkSpecificPersistInputPortMap;
 
     private StreamMeta(String id)
     {
       this.id = id;
+      enableSinksForPersisting = new HashSet<InputPortMeta>();
+      sinkSpecificPersistOperatorMap = new HashMap<LogicalPlan.InputPortMeta, OperatorMeta>();
+      sinkSpecificPersistInputPortMap = new HashMap<LogicalPlan.InputPortMeta, InputPortMeta>();
     }
 
     @Override
@@ -433,7 +443,7 @@ public class LogicalPlan implements Serializable, DAG
     }
 
     @Override
-    public StreamMeta addSink(Operator.InputPort<?> port)
+    public DAG.StreamMeta addSink(Operator.InputPort<?> port)
     {
       InputPortMeta portMeta = assertGetPortMeta(port);
       OperatorMeta om = portMeta.getOperatorWrapper();
@@ -460,6 +470,18 @@ public class LogicalPlan implements Serializable, DAG
           rootOperators.add(ipm.getOperatorWrapper());
         }
       }
+      // Remove logger operator for at stream level if present:
+      if (getPersistOperator() != null) {
+        removeOperator(getPersistOperator().getOperator());
+      }
+
+      // Remove loggers added for specific sinks :
+      for (Entry<InputPortMeta, OperatorMeta> entry : sinkSpecificPersistOperatorMap.entrySet()) {
+        removeOperator(entry.getValue().getOperator());
+      }
+
+      sinkSpecificPersistOperatorMap.clear();
+      sinkSpecificPersistInputPortMap.clear();
       this.sinks.clear();
       if (this.source != null) {
         this.source.getOperatorMeta().outputStreams.remove(this.source);
@@ -511,6 +533,174 @@ public class LogicalPlan implements Serializable, DAG
       return !((this.id == null) ? (other.id != null) : !this.id.equals(other.id));
     }
 
+    @Override
+    public com.datatorrent.api.DAG.StreamMeta persist(Operator persistOperator, InputPort<?> port) {
+      enablePersistingForSinksAddedSoFar(persistOperator);
+      OperatorMeta persistOpMeta = createPersistOperatorMeta(persistOperator);
+      if (!persistOpMeta.getPortMapping().inPortMap.containsKey(port)) {
+        String msg = String.format("Port argument %s does not belong to persist operator passed %s", port, persistOperator);
+        throw new IllegalArgumentException(msg);
+      }
+
+      setPersistOperatorInputPort(persistOpMeta.getPortMapping().inPortMap.get(port));
+
+      return this;
+    }
+
+    @Override
+    public com.datatorrent.api.DAG.StreamMeta persist(Operator persistOperator) {
+      enablePersistingForSinksAddedSoFar(persistOperator);
+      OperatorMeta persistOpMeta = createPersistOperatorMeta(persistOperator);
+      InputPortMeta port = persistOpMeta.getPortMapping().inPortMap.values().iterator().next();
+      setPersistOperatorInputPort(port);
+      return this;
+    }
+
+    private void enablePersistingForSinksAddedSoFar(Operator persistOperator) {
+      for (InputPortMeta portMeta : getSinks()) {
+        if (sinkSpecificPersistOperatorMap.containsKey(portMeta)) {
+          // sink added through calling addSink on StreamMetaWrapper. Do not
+          // include this port for logging.
+          continue;
+        }
+        enableSinksForPersisting.add(portMeta);
+      }
+    }
+
+    private OperatorMeta createPersistOperatorMeta(Operator persistOperator) {
+      persistOperatorName = getPersistOperatorName();
+      addOperator(persistOperatorName, persistOperator);
+      OperatorMeta loggerOpMeta = getOperatorMeta(persistOperatorName);
+      setPersistOperator(loggerOpMeta);
+      if (loggerOpMeta.getPortMapping().inPortMap.isEmpty()) {
+        String msg = String.format("Logger operator passed %s has no input ports to connect", persistOperator);
+        throw new IllegalArgumentException(msg);
+      }
+      Map<InputPort<?>, InputPortMeta> inputPortMap = loggerOpMeta.getPortMapping().inPortMap;
+      int nonOptionalInputPortCount = 0;
+      for (InputPortMeta inputPort : inputPortMap.values()) {
+        if (inputPort.portAnnotation ==  null || !inputPort.portAnnotation.optional()) {
+          // By default input port is non-optional unless specified
+          nonOptionalInputPortCount++;
+        }
+      }
+
+      if (nonOptionalInputPortCount > 1) {
+        String msg = String.format("Logger operator %s has more than 1 non optional input port", persistOperator);
+        throw new IllegalArgumentException(msg);
+      }
+
+      Map<OutputPort<?>, OutputPortMeta> outputPortMap = loggerOpMeta.getPortMapping().outPortMap;
+      for (OutputPortMeta outPort : outputPortMap.values()) {
+        if (outPort.portAnnotation != null && !outPort.portAnnotation.optional()) {
+          // By default output port is optional unless specified
+          String msg = String.format("Logger operator %s has non optional output port %s", persistOperator, outPort.fieldName);
+          throw new IllegalArgumentException(msg);
+        }
+      }
+      return loggerOpMeta;
+    }
+
+    public OperatorMeta getPersistOperator() {
+      return persistOperatorForStream;
+    }
+
+    private void setPersistOperator(OperatorMeta loggerOperator) {
+      this.persistOperatorForStream = loggerOperator;
+    }
+
+    public InputPortMeta getPersistOperatorInputPort() {
+      return persistOperatorInputPort;
+    }
+
+    private void setPersistOperatorInputPort(InputPortMeta inport) {
+      this.addSink(inport.getPortObject());
+      this.persistOperatorInputPort = inport;
+    }
+
+    public Set<InputPortMeta> getSinksToPersist() {
+      return enableSinksForPersisting;
+    }
+
+    private String getPersistOperatorName() {
+      return id + "_persister";
+    }
+
+    private String getPersistOperatorName(InputPort<?> sinkToPersist) {
+      InputPortMeta portMeta = assertGetPortMeta(sinkToPersist);
+      OperatorMeta operatorMeta = portMeta.getOperatorWrapper();
+      return id + "_" + operatorMeta.getName() + "_persister";
+    }
+
+    @Override
+    public com.datatorrent.api.DAG.StreamMeta persist(InputPort<?> sinkToPersist, Operator persistOperator, InputPort<?> port) {
+      // When persist Stream is invoked for a specific sink, logger operator can
+      // directly be added
+      String loggerOperatorName = getPersistOperatorName(sinkToPersist);
+      addOperator(loggerOperatorName, persistOperator);
+      addStreamCodec(sinkToPersist, port);
+      addSink(port);
+      InputPortMeta sinkPortMeta = assertGetPortMeta(sinkToPersist);
+      updateSinkSpecificLoggerMap(sinkPortMeta, loggerOperatorName, port);
+      return this;
+    }
+
+    @Override
+    public com.datatorrent.api.DAG.StreamMeta persist(InputPort<?> sinkToPersist, Operator persistOperator) {
+      String loggerOperatorName = getPersistOperatorName(sinkToPersist);
+      addOperator(loggerOperatorName, persistOperator);
+      OperatorMeta loggerOpMeta = operators.get(loggerOperatorName);
+      if (loggerOpMeta.getPortMapping().inPortMap.isEmpty()) {
+        String msg = String.format("Logger operator passed %s has no input ports to connect", persistOperator);
+        throw new IllegalArgumentException(msg);
+      }
+
+      InputPort<?> port = loggerOpMeta.getPortMapping().inPortMap.keySet().iterator().next();
+      addStreamCodec(sinkToPersist, port);
+      addSink(port);
+      InputPortMeta sinkPortMeta = assertGetPortMeta(sinkToPersist);
+      updateSinkSpecificLoggerMap(sinkPortMeta, loggerOperatorName, port);
+      return this;
+    }
+
+    private void addStreamCodec(InputPort<?> sinkToPersist, InputPort<?> port) {
+      if(sinkToPersist.getStreamCodec() != null) {
+        Set<StreamCodec<Object>> codecs = new HashSet<StreamCodec<Object>>();
+        codecs.add((StreamCodec<Object>)sinkToPersist.getStreamCodec());
+        StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(codecs, (StreamCodec<Object>)port.getStreamCodec());
+        setInputPortAttribute(port, PortContext.STREAM_CODEC, codec);
+      }
+    }
+
+    private void updateSinkSpecificLoggerMap(InputPortMeta sinkToPersistPortMeta, String persistOperatorName, InputPort<?> persistOperatorInPort) {
+      OperatorMeta persistOpMeta = operators.get(persistOperatorName);
+      this.sinkSpecificPersistOperatorMap.put(sinkToPersistPortMeta, persistOpMeta);
+      this.sinkSpecificPersistInputPortMap.put(sinkToPersistPortMeta, persistOpMeta.getMeta(persistOperatorInPort));
+    }
+
+    public void resetStreamPersistanceOnSinkRemoval(InputPortMeta sinkBeingRemoved) {
+      // If persistStream was enabled for the entire stream and the operator to
+      // be removed was the only one enabled for logging
+      // Remove the logger operator
+      if (enableSinksForPersisting.contains(sinkBeingRemoved)) {
+        enableSinksForPersisting.remove(sinkBeingRemoved);
+        if (enableSinksForPersisting.isEmpty()) {
+          // Remove logger operator
+          removeOperator(getPersistOperator().getOperator());
+          setPersistOperator(null);
+        }
+      }
+
+      // If logger was added specific to this sink, remove the logger operator
+      if (sinkSpecificPersistInputPortMap.containsKey(sinkBeingRemoved)) {
+        sinkSpecificPersistInputPortMap.remove(sinkBeingRemoved);
+      }
+      if (sinkSpecificPersistOperatorMap.containsKey(sinkBeingRemoved)) {
+        OperatorMeta persistOpMeta = sinkSpecificPersistOperatorMap.get(sinkBeingRemoved);
+        sinkSpecificPersistOperatorMap.remove(sinkBeingRemoved);
+        removeOperator(persistOpMeta.getOperator());
+      }
+    }
   }
 
   /**
@@ -837,9 +1027,12 @@ public class LogicalPlan implements Serializable, DAG
 
     Map<InputPortMeta, StreamMeta> inputStreams = om.getInputStreams();
     for (Map.Entry<InputPortMeta, StreamMeta> e : inputStreams.entrySet()) {
+      StreamMeta stream = e.getValue();
       if (e.getKey().getOperatorWrapper() == om) {
-         e.getValue().sinks.remove(e.getKey());
+         stream.sinks.remove(e.getKey());
       }
+      // If persistStream was enabled for stream, reset stream when sink removed 
+      stream.resetStreamPersistanceOnSinkRemoval(e.getKey());
     }
     this.operators.remove(om.getName());
     rootOperators.remove(om);
