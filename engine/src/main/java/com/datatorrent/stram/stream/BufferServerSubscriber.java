@@ -37,6 +37,7 @@ import com.datatorrent.stram.engine.ByteCounterStream;
 import com.datatorrent.stram.engine.StreamContext;
 import com.datatorrent.stram.engine.SweepableReservoir;
 import com.datatorrent.stram.engine.WindowGenerator;
+import com.datatorrent.stram.plan.logical.StreamCodecWrapperForPersistance;
 import com.datatorrent.stram.tuple.*;
 
 /**
@@ -272,6 +273,7 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
           Slice fm = polledFragments.pollUnsafe();
           com.datatorrent.bufferserver.packet.Tuple data = com.datatorrent.bufferserver.packet.Tuple.getTuple(fm.buffer, fm.offset, fm.length);
           Object o;
+          boolean skipObject=false;
           switch (data.getType()) {
             case NO_MESSAGE:
               freeFragments.offer(fm);
@@ -294,8 +296,14 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
             case PAYLOAD:
               if (statefulSerde == null) {
                 o = serde.fromByteArray(data.getData());
-              }
-              else {
+  
+                if (serde instanceof StreamCodecWrapperForPersistance) {
+                  StreamCodecWrapperForPersistance wrapperCodec = (StreamCodecWrapperForPersistance) serde;
+                  if (!wrapperCodec.shouldCaptureEvent(o)) {
+                    skipObject = true;
+                  }
+                }
+              } else {
                 dsp.data = data.getData();
                 o = statefulSerde.fromDataStatePair(dsp);
               }
@@ -326,8 +334,10 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
           }
 
           freeFragments.offer(fm);
-          for (int i = reservoirs.length; i-- > 0;) {
-            reservoirs[i].add(o);
+          if (!skipObject) {
+            for (int i = reservoirs.length; i-- > 0;) {
+              reservoirs[i].add(o);
+            }
           }
         }
       }

@@ -15,9 +15,11 @@
  */
 package com.datatorrent.stram.stream;
 
+import com.datatorrent.stram.plan.logical.StreamCodecWrapperForPersistance;
 import com.datatorrent.stram.tuple.Tuple;
 import com.datatorrent.api.Sink;
 import com.datatorrent.api.StreamCodec;
+
 import java.util.Set;
 
 /**
@@ -60,10 +62,20 @@ public class PartitionAwareSink<T> implements Sink<T>
       count++;
       output.put(payload);
     }
-    else if (partitions.contains(serde.getPartition(payload) & mask)) {
+    else if (canPutPayloadToOutput(payload)) {
       count++;
       output.put(payload);
     }
+  }
+
+  private boolean canPutPayloadToOutput(T payload)
+  {
+    if (serde instanceof StreamCodecWrapperForPersistance) {
+      if (!((StreamCodecWrapperForPersistance) serde).shouldCaptureEvent(payload)) {
+        return false;
+      }
+    }
+    return partitions.contains(serde.getPartition(payload) & mask);
   }
 
   @Override

@@ -106,6 +106,14 @@ public interface DAG extends DAGContext, Serializable
 
     public StreamMeta addSink(Operator.InputPort<?> port);
 
+    public StreamMeta persist(Operator persistOperator, Operator.InputPort<?> persistOperatorInputPort);
+
+    public com.datatorrent.api.DAG.StreamMeta persist(Operator persistOperator);
+    
+    public StreamMeta persist(Operator.InputPort<?> sinkToPersist, Operator persistOperator, Operator.InputPort<?> persistOperatorInputPort);
+
+    public com.datatorrent.api.DAG.StreamMeta persist(Operator.InputPort<?> sinkToPersist, Operator persistOperator);
+
   }
 
   /**

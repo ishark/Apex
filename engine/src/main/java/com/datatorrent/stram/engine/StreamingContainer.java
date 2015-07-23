@@ -76,6 +76,7 @@ import com.datatorrent.stram.debug.StdOutErrLog;
 import com.datatorrent.stram.plan.logical.LogicalPlan;
 import com.datatorrent.stram.plan.logical.Operators.PortContextPair;
 import com.datatorrent.stram.plan.logical.Operators.PortMappingDescriptor;
+import com.datatorrent.stram.plan.logical.StreamCodecWrapperForPersistance;
 import com.datatorrent.stram.security.StramUserLogin;
 import com.datatorrent.stram.stream.*;
 
@@ -1176,7 +1177,7 @@ public class StreamingContainer extends YarnContainerMain
             }
 
             /* here everything should be multisink capable */
-            if (nidi.partitionKeys == null || nidi.partitionKeys.isEmpty()) {
+            if (nidi.partitionKeys == null || nidi.partitionKeys.isEmpty() || !(streamCodec instanceof StreamCodecWrapperForPersistance)) {
               ((Stream.MultiSinkCapableStream) pair.component).setSink(sinkIdentifier, stream);
             }
             else {

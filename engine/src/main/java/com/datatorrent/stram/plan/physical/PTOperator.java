@@ -75,7 +75,7 @@ public class PTOperator implements java.io.Serializable
 
     public final LogicalPlan.StreamMeta logicalStream;
     public final PTOperator target;
-    public final PartitionKeys partitions;
+    public PartitionKeys partitions;
     public final PTOutput source;
     public final String portName;
 
