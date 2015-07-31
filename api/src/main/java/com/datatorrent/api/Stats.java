@@ -33,6 +33,17 @@ public interface Stats extends Serializable
     long getWindowId();
   }
 
+  class CheckpointStats implements Stats
+  {
+    public long checkpointStartTime;
+    public long checkpointTime;
+
+    @Override
+    public String toString()
+    {
+      return "CheckpointStats{" + "checkpointStartTime=" + checkpointStartTime + ", checkpointTime=" + checkpointTime + '}';
+    }
+  }
   public static class OperatorStats implements Stats
   {
     public long windowId;
@@ -40,12 +51,13 @@ public interface Stats extends Serializable
     public ArrayList<PortStats> inputPorts;
     public ArrayList<PortStats> outputPorts;
     public long cpuTimeUsed;
+    public CheckpointStats checkpointStats;
     /**
-     * @deprecated use {@link #customMetrics}
+     * @deprecated use {@link #metrics}
      */
     @Deprecated
     public Object counters;
-    public Map<String, Object> customMetrics;
+    public Map<String, Object> metrics;
 
     /**
      * If there is a recording on the operator, this contains the recording id, otherwise null
@@ -81,7 +93,8 @@ public interface Stats extends Serializable
     @Override
     public String toString()
     {
-      return "OperatorStats{" + "windowId=" + windowId + ", checkpointedWindowId=" + checkpoint + ", inputPorts=" + inputPorts + ", outputPorts=" + outputPorts + ", cpuTimeUsed=" + cpuTimeUsed + '}';
+      return "OperatorStats{" + "windowId=" + windowId + ", checkpointedWindowId=" + checkpoint + ", inputPorts=" + inputPorts + ", outputPorts=" + outputPorts + ", cpuTimeUsed=" + cpuTimeUsed +
+        ", checkpointStats=" + checkpointStats + '}';
     }
 
     private static final long serialVersionUID = 201309131905L;
