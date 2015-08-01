@@ -37,11 +37,11 @@ import com.datatorrent.bufferserver.internal.LogicalNode;
 import com.datatorrent.bufferserver.packet.*;
 import com.datatorrent.bufferserver.storage.Storage;
 import com.datatorrent.common.util.NameableThreadFactory;
-import com.datatorrent.netlet.util.VarInt;
 import com.datatorrent.netlet.AbstractLengthPrependerClient;
 import com.datatorrent.netlet.DefaultEventLoop;
 import com.datatorrent.netlet.EventLoop;
 import com.datatorrent.netlet.Listener.ServerListener;
+import com.datatorrent.netlet.util.VarInt;
 
 /**
  * The buffer server application<p>
@@ -60,6 +60,8 @@ public class Server implements ServerListener
   private InetSocketAddress address;
   private final ExecutorService serverHelperExecutor;
   private final ExecutorService storageHelperExecutor;
+
+  private byte[] authToken;
 
   /**
    * @param port - port number to bind to or 0 to auto select a free port
@@ -120,6 +122,11 @@ public class Server implements ServerListener
 
     this.eventloop = eventloop;
     return address;
+  }
+
+  public void setAuthToken(byte[] authToken)
+  {
+    this.authToken = authToken == null? null: Arrays.copyOf(authToken, authToken.length);
   }
 
   /**
@@ -322,7 +329,15 @@ public class Server implements ServerListener
   @Override
   public ClientListener getClientConnection(SocketChannel sc, ServerSocketChannel ssc)
   {
-    return new UnidentifiedClient(sc);
+    ClientListener client;
+    if (authToken == null) {
+      client = new UnidentifiedClient();
+    } else {
+      AuthClient authClient = new AuthClient();
+      authClient.setToken(authToken);
+      client = authClient;
+    }
+    return client;
   }
 
   @Override
@@ -335,23 +350,38 @@ public class Server implements ServerListener
     throw new RuntimeException(cce);
   }
 
-  class UnidentifiedClient extends AbstractLengthPrependerClient
+  class AuthClient extends com.datatorrent.bufferserver.client.AuthClient
   {
-    SocketChannel channel;
-    boolean ignore;
-
-    UnidentifiedClient(SocketChannel channel)
+    @Override
+    public void onMessage(byte[] buffer, int offset, int size)
     {
-      this.channel = channel;
+      authenticateMessage(buffer, offset, size);
+
+      unregistered(key);
+      UnidentifiedClient client = new UnidentifiedClient();
+      key.attach(client);
+      key.interestOps(SelectionKey.OP_READ);
+      client.registered(key);
+
+      int len = writeOffset - readOffset - size;
+      if (len > 0) {
+        client.transferBuffer(buffer, readOffset + size, len);
+      }
+
+      /*
+       * Remaining data has been transferred to next client in the chain and is going to be processed there so we would
+       * not be processing it here, hence discarding it.
+       */
+      discardReadBuffer();
     }
+  }
+
+  class UnidentifiedClient extends SeedDataClient
+  {
 
     @Override
     public void onMessage(byte[] buffer, int offset, int size)
     {
-      if (ignore) {
-        return;
-      }
-
       Tuple request = Tuple.getTuple(buffer, offset, size);
       switch (request.getType()) {
         case PUBLISHER_REQUEST:
@@ -395,7 +425,12 @@ public class Server implements ServerListener
           if (len > 0) {
             publisher.transferBuffer(this.buffer, readOffset + size, len);
           }
-          ignore = true;
+
+          /*
+           * Remaining data transferred to next client and being processed there, not processed here anymore hence
+           * discarding it.
+           */
+          discardReadBuffer();
 
           break;
 
@@ -404,7 +439,11 @@ public class Server implements ServerListener
            * unregister the unidentified client since its job is done!
            */
           unregistered(key);
-          ignore = true;
+          /*
+           * Control is being transferred to next client in the chain so no more processing in this client after this
+           * message.
+           */
+          discardReadBuffer();
           logger.info("Received subscriber request: {}", request);
 
           SubscribeRequestTuple subscriberRequest = (SubscribeRequestTuple)request;
@@ -559,7 +598,7 @@ public class Server implements ServerListener
    * this is the end on the server side which handles all the communication.
    *
    */
-  class Publisher extends AbstractLengthPrependerClient
+  class Publisher extends SeedDataClient
   {
     private final DataList datalist;
     boolean dirty;
@@ -568,26 +607,6 @@ public class Server implements ServerListener
     {
       super(dl.getBuffer(windowId), dl.getPosition(), 1024);
       this.datalist = dl;
-    }
-
-    public void transferBuffer(byte[] array, int offset, int len)
-    {
-      int remainingCapacity;
-      do {
-        remainingCapacity = buffer.length - writeOffset;
-        if (len < remainingCapacity) {
-          remainingCapacity = len;
-          byteBuffer.position(writeOffset + remainingCapacity);
-        }
-        else {
-          byteBuffer.position(buffer.length);
-        }
-        System.arraycopy(array, offset, buffer, writeOffset, remainingCapacity);
-        read(remainingCapacity);
-
-        offset += remainingCapacity;
-      }
-      while ((len -= remainingCapacity) > 0);
     }
 
     @Override
@@ -746,6 +765,44 @@ public class Server implements ServerListener
       }
     }
 
+  }
+
+  static abstract class SeedDataClient extends AbstractLengthPrependerClient
+  {
+
+    SeedDataClient()
+    {
+    }
+
+    SeedDataClient(int readBufferSize, int sendBufferSize)
+    {
+      super(readBufferSize, sendBufferSize);
+    }
+
+    SeedDataClient(byte[] readbuffer, int position, int sendBufferSize)
+    {
+      super(readbuffer, position, sendBufferSize);
+    }
+
+    void transferBuffer(byte[] array, int offset, int len)
+    {
+      int remainingCapacity;
+      do {
+        remainingCapacity = buffer.length - writeOffset;
+        if (len < remainingCapacity) {
+          remainingCapacity = len;
+          byteBuffer.position(writeOffset + remainingCapacity);
+        }
+        else {
+          byteBuffer.position(buffer.length);
+        }
+        System.arraycopy(array, offset, buffer, writeOffset, remainingCapacity);
+        read(remainingCapacity);
+
+        offset += remainingCapacity;
+      }
+      while ((len -= remainingCapacity) > 0);
+    }
   }
 
   private static final Logger logger = LoggerFactory.getLogger(Server.class);

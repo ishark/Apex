@@ -19,7 +19,8 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Stack;
 
-import org.objectweb.asm.signature.SignatureVisitor;
+import org.apache.xbean.asm5.Opcodes;
+import org.apache.xbean.asm5.signature.SignatureVisitor;
 
 import com.datatorrent.stram.webapp.asm.Type.ArrayTypeNode;
 import com.datatorrent.stram.webapp.asm.Type.ParameterizedTypeNode;
@@ -37,7 +38,7 @@ import com.datatorrent.stram.webapp.asm.Type.WildcardTypeNode;
  *
  * @since 2.1
  */
-public abstract class BaseSignatureVisitor implements SignatureVisitor
+public abstract class BaseSignatureVisitor extends SignatureVisitor
 {
   
   protected List<TypeVariableNode> typeV = new LinkedList<Type.TypeVariableNode>();
@@ -47,7 +48,11 @@ public abstract class BaseSignatureVisitor implements SignatureVisitor
   public static final int VISIT_FORMAL_TYPE = 0;
   
   protected Stack<Type> visitingStack = new Stack<Type>();
-  
+
+  public BaseSignatureVisitor() {
+    super(Opcodes.ASM5);
+  }
+
 //  protected transient String signature = "";
 
 
@@ -146,8 +151,10 @@ public abstract class BaseSignatureVisitor implements SignatureVisitor
   @Override
   public void visitTypeArgument()
   { 
-
-    
+    // For unbounded wild card entries, add wild card entry upper bound: extends Object
+    visitTypeArgument(SignatureVisitor.EXTENDS);
+    visitClassType(Object.class.getName());
+    visitEnd();
   }
 
   @Override

@@ -17,8 +17,7 @@ package com.datatorrent.stram.webapp.asm;
 
 import java.util.List;
 
-import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.FieldNode;
+import org.apache.xbean.asm5.Opcodes;
 
 /**
  * Store class information only needed by app builder
@@ -38,7 +37,7 @@ public class CompactClassNode
   
   private List<CompactMethodNode> setterMethods;
   
-  private CompactMethodNode initializableConstructor;
+  private CompactMethodNode defaultConstructor;
   
   private List<CompactClassNode> innerClasses;
   
@@ -66,14 +65,14 @@ public class CompactClassNode
     this.name = name;
   }
 
-  public CompactMethodNode getInitializableConstructor()
+  public CompactMethodNode getDefaultConstructor()
   {
-    return initializableConstructor;
+    return defaultConstructor;
   }
 
-  public void setInitializableConstructor(CompactMethodNode initializableConstructor)
+  public void setDefaultConstructor(CompactMethodNode defaultConstructor)
   {
-    this.initializableConstructor = initializableConstructor;
+    this.defaultConstructor = defaultConstructor;
   }
 
   public List<CompactClassNode> getInnerClasses()

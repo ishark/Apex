@@ -68,7 +68,7 @@ public class OperatorDeployInfo implements Serializable, OperatorContext
   }
 
   @Override
-  public void sendCustomMetrics(Collection<String> metricNames)
+  public void sendMetrics(Collection<String> metricNames)
   {
     throw new UnsupportedOperationException("Not supported yet.");
   }
@@ -120,6 +120,7 @@ public class OperatorDeployInfo implements Serializable, OperatorContext
      */
     public String bufferServerHost;
     public int bufferServerPort;
+    public byte[] bufferServerToken;
     /**
      * Class name of tuple SerDe (buffer server stream only).
      */
@@ -182,7 +183,7 @@ public class OperatorDeployInfo implements Serializable, OperatorContext
     }
 
     @Override
-    public void sendCustomMetrics(Collection<String> metricNames)
+    public void sendMetrics(Collection<String> metricNames)
     {
       throw new UnsupportedOperationException("Not supported yet.");
     }
@@ -212,6 +213,7 @@ public class OperatorDeployInfo implements Serializable, OperatorContext
      */
     public String bufferServerHost;
     public int bufferServerPort;
+    public byte[] bufferServerToken;
     public Map<Integer, StreamCodec<?>> streamCodecs = new HashMap<Integer, StreamCodec<?>>();
     /**
      * Context attributes for output port
@@ -252,7 +254,7 @@ public class OperatorDeployInfo implements Serializable, OperatorContext
     }
 
     @Override
-    public void sendCustomMetrics(Collection<String> metricNames)
+    public void sendMetrics(Collection<String> metricNames)
     {
       throw new UnsupportedOperationException("Not supported yet.");
     }

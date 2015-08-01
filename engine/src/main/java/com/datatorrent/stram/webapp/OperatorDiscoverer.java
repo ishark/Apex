@@ -46,6 +46,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.text.WordUtils;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jettison.json.*;
+import org.apache.xbean.asm5.tree.AnnotationNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xml.sax.Attributes;
@@ -258,6 +259,8 @@ public class OperatorDiscoverer
           LOG.warn("Cannot process file {}", f, ex);
         }
       }
+
+      typeGraph.trim();
 
       typeGraph.updatePortTypeInfoInTypeGraph(openJarFiles, openClassFiles);
     }

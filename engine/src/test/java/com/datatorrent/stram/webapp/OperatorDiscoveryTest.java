@@ -15,6 +15,8 @@
  */
 package com.datatorrent.stram.webapp;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.net.URI;
 import java.util.*;
@@ -44,6 +46,10 @@ import com.datatorrent.stram.plan.logical.LogicalPlan.OperatorMeta;
 import com.datatorrent.stram.plan.logical.LogicalPlanConfiguration;
 import com.datatorrent.stram.util.ObjectMapperFactory;
 import com.datatorrent.stram.webapp.TypeDiscoverer.UI_TYPE;
+
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
 import com.google.common.collect.Lists;
 
 public class OperatorDiscoveryTest
@@ -54,6 +60,9 @@ public class OperatorDiscoveryTest
   {
     private int A;
     private T B;
+    private ArrayList<?> testWildCard;
+    private Map<?, ? extends Number> testWildCardMapProperty;
+
     @InputPortFieldAnnotation(optional = true)
     public transient final DefaultInputPort<T> input = new DefaultInputPort<T>() {
       @Override
@@ -68,7 +77,13 @@ public class OperatorDiscoveryTest
       }
     };
 
-    @OutputPortFieldAnnotation(optional = false, error= true)
+    public transient final DefaultInputPort<Map<?, ? extends String>> input2 = new DefaultInputPort<Map<?, ? extends String>>() {
+      public void process(Map<?, ? extends String> tuple) {
+        // Do nothing
+      }
+    };
+
+    @OutputPortFieldAnnotation(optional = false, error = true)
     public transient final DefaultOutputPort<String> output = new DefaultOutputPort<String>();
 
     public transient final DefaultOutputPort<Double> output1 = new DefaultOutputPort<Double>();
@@ -93,6 +108,23 @@ public class OperatorDiscoveryTest
     public void setB(T b) {
       B = b;
     }
+
+    public ArrayList<?> getTestWildCard() {
+      return testWildCard;
+    }
+
+    public void setTestWildCard(ArrayList<?> testWildCard) {
+      this.testWildCard = testWildCard;
+    }
+
+    public Map<?, ? extends Number> getTestWildCardMapProperty() {
+      return testWildCardMapProperty;
+    }
+
+    public void setTestWildCardMapProperty(
+        Map<?, ? extends Number> testWildCardMapProperty) {
+      this.testWildCardMapProperty = testWildCardMapProperty;
+    }
   }
 
   public static class SubClassGeneric<K extends Number> extends GenericClassBase<K>
@@ -105,14 +137,59 @@ public class OperatorDiscoveryTest
 
   }
 
+  public static class CircleType<E extends Comparator<E>>
+  {
+    private E circleType;
+
+    public E getCircleType()
+    {
+      return circleType;
+    }
+
+    public void setCircleType(E circleType)
+    {
+      this.circleType = circleType;
+    }
+  }
+
+  @Test
+  public void bruteForceTest() throws Exception
+  {
+    String[] classFilePath = getClassFileInClasspath();
+    OperatorDiscoverer operatorDiscoverer = new OperatorDiscoverer(classFilePath);
+    operatorDiscoverer.buildTypeGraph();
+    for (String arbitraryClass : operatorDiscoverer.getTypeGraph().getInstantiableDescendants("java.lang.Object")) {
+      operatorDiscoverer.describeClass(arbitraryClass);
+    }
+  }
+
+  @Test
+  public void testTypeGraphSerializer() throws Exception
+  {
+    String[] classFilePath = getClassFileInClasspath();
+    OperatorDiscoverer operatorDiscoverer = new OperatorDiscoverer(classFilePath);
+    operatorDiscoverer.buildTypeGraph();
+
+    // make sure (de)serialization of type graph works withtout problem
+    Kryo kryo = new Kryo();
+    TypeGraph.TypeGraphSerializer tgs = new TypeGraph.TypeGraphSerializer();
+    kryo.register(TypeGraph.class, tgs);
+    ByteArrayOutputStream baos = new ByteArrayOutputStream(1024 * 1024 * 20);
+    Output output = new Output(baos);
+    kryo.writeObject(output, operatorDiscoverer.getTypeGraph());
+    output.close();
+    Input input = new Input(new ByteArrayInputStream(baos.toByteArray()));
+    TypeGraph tg = kryo.readObject(input, TypeGraph.class);
+  }
+
   @Test
   public void testOperatorDiscoverer() throws Exception
   {
     String[] classFilePath = getClassFileInClasspath();
     OperatorDiscoverer operatorDiscoverer = new OperatorDiscoverer(classFilePath);
     operatorDiscoverer.buildTypeGraph();
-    JSONObject oper = operatorDiscoverer.describeOperator(SubSubClassGeneric.class.getName());
-    System.out.println(oper);
+
+    JSONObject oper = operatorDiscoverer.describeOperator(SubSubClassGeneric.class);
     String debug = "\n(ASM)type info for " + TestOperator.class + ":\n" + oper.toString(2) + "\n";
 
     JSONArray props = oper.getJSONArray("properties");
@@ -121,13 +198,13 @@ public class OperatorDiscoveryTest
     JSONArray outputPorts = oper.getJSONArray("outputPorts");
 
     Assert.assertNotNull(debug + "Properties aren't null ", props);
-    Assert.assertEquals(debug + "Number of properties ", 3, props.length());
+    Assert.assertEquals(debug + "Number of properties ", 5, props.length());
 
     Assert.assertNotNull(debug + "Port types aren't null ", portTypes);
-    Assert.assertEquals(debug + "Number of port types ", 4, portTypes.length());
+    Assert.assertEquals(debug + "Number of port types ", 5, portTypes.length());
 
     Assert.assertNotNull(debug + "inputPorts aren't null ", inputPorts);
-    Assert.assertEquals(debug + "Number of inputPorts ", 2, inputPorts.length());
+    Assert.assertEquals(debug + "Number of inputPorts ", 3, inputPorts.length());
 
     Assert.assertNotNull(debug + "outputPorts aren't null ", outputPorts);
     Assert.assertEquals(debug + "Number of outputPorts ", 2, outputPorts.length());
@@ -136,9 +213,29 @@ public class OperatorDiscoveryTest
     JSONObject portType = (JSONObject)portTypes.get(0);
     Assert.assertEquals(portType.get("name"), "input");
     Assert.assertEquals(portType.get("typeLiteral"), "T");
-    Assert.assertEquals(portType.get("type"), "java.lang.Long");
+    Assert.assertEquals(portType.get("type"), "long");
 
-    portType = (JSONObject)portTypes.get(2);
+    portType = (JSONObject) portTypes.get(2);
+    Assert.assertEquals(portType.get("name"), "input2");
+    Assert.assertEquals(portType.get("type"), "java.util.Map");
+    JSONArray typeArgs = portType.getJSONArray("typeArgs");
+    Assert.assertEquals(debug + " type " + portType,
+        "class " + Object.class.getName(), typeArgs.getJSONObject(0)
+            .getJSONObject("typeBounds").getJSONArray("upper").get(0));
+    Assert.assertEquals(debug + " type " + portType,
+        "class " + String.class.getName(), typeArgs.getJSONObject(1)
+            .getJSONObject("typeBounds").getJSONArray("upper").get(0));
+
+    JSONObject wildcardType = getJSONProperty(props, "testWildCardMapProperty");
+    Assert.assertEquals(debug + "type " + wildcardType, Map.class.getName(), wildcardType.get("type"));
+    Assert.assertEquals(debug + "type " + wildcardType,
+        "class " + Object.class.getName(), wildcardType.getJSONArray("typeArgs").getJSONObject(0)
+            .getJSONObject("typeBounds").getJSONArray("upper").get(0));
+    Assert.assertEquals(debug + "type " + wildcardType, "class " + Number.class.getName(),
+        wildcardType.getJSONArray("typeArgs").getJSONObject(1)
+            .getJSONObject("typeBounds").getJSONArray("upper").get(0));
+
+    portType = (JSONObject)portTypes.get(3);
     Assert.assertEquals(portType.get("name"), "output");
     Assert.assertEquals(portType.get("type"), "java.lang.String");
 
@@ -161,6 +258,13 @@ public class OperatorDiscoveryTest
     Assert.assertEquals(outPort.get("name"), "output1");
     Assert.assertEquals(outPort.get("optional"), true);
     Assert.assertEquals(outPort.get("error"), false);
+
+    JSONObject circleType = operatorDiscoverer.describeClass(CircleType.class.getName())
+      .getJSONArray("properties").getJSONObject(0);
+    Assert.assertEquals(circleType.toString(2), circleType.getString("typeLiteral"), "E");
+    Assert.assertEquals(circleType.toString(2), circleType.getString("type"), "java.util.Comparator");
+    Assert.assertEquals(circleType.toString(2),
+      circleType.getJSONArray("typeArgs").getJSONObject(0).getString("typeLiteral"), "E");
   }
 
   @Test
@@ -191,6 +295,12 @@ public class OperatorDiscoveryTest
     Assert.assertEquals(debug + "The first typeArg of map", String.class.getName(), typeArgs.getJSONObject(0).get("type"));
     Assert.assertEquals(debug + "The second typeArg of map", Structured.class.getName(), typeArgs.getJSONObject(1).get("type"));
 
+    JSONObject integerProperty = getJSONProperty(props, "integerProp");
+    Assert.assertEquals(debug + "type " + integerProperty, "int", integerProperty.get("type"));
+
+    JSONObject uriProperty = getJSONProperty(props, "uri");
+    Assert.assertEquals(debug + "type " + uriProperty, String.class.getName(), uriProperty.get("type"));
+
     JSONObject structuredProperty = getJSONProperty(props, "nested");
     Assert.assertEquals(debug + "type " + structuredProperty, Structured.class.getName(), structuredProperty.get("type"));
 
@@ -210,6 +320,8 @@ public class OperatorDiscoveryTest
 
     JSONObject wildcardType = getJSONProperty(props, "wildcardType");
     Assert.assertEquals(debug + "type " + wildcardType, Map.class.getName(), wildcardType.get("type"));
+    Assert.assertEquals(debug + "type " + wildcardType, "class " + Object.class.getName(),
+        wildcardType.getJSONArray("typeArgs").getJSONObject(0).getJSONObject("typeBounds").getJSONArray("upper").get(0));
     Assert.assertEquals(debug + "type " + wildcardType, "class " + Long.class.getName(),
         wildcardType.getJSONArray("typeArgs").getJSONObject(1).getJSONObject("typeBounds").getJSONArray("lower").get(0));
 
@@ -236,8 +348,7 @@ public class OperatorDiscoveryTest
     JSONObject aObj = getJSONProperty(props, "a");
     Assert.assertEquals("type " + aObj, Number.class.getName(), aObj.get("type"));
     JSONObject bObj = getJSONProperty(props, "b");
-    Assert.assertEquals("type " + bObj, "java.lang.Long", bObj.get("type"));
-    Assert.assertEquals("type " + bObj, "long", bObj.get("uiType"));
+    Assert.assertEquals("type " + bObj, "long", bObj.get("type"));
     JSONObject cObj = getJSONProperty(props, "c");
     Assert.assertEquals("type " + cObj, List.class.getName(), cObj.get("type"));
     JSONObject dObj = getJSONProperty(props, "d");
@@ -304,19 +415,18 @@ public class OperatorDiscoveryTest
     OperatorDiscoverer od = new OperatorDiscoverer();
 
 
-    List<String> dList = od.getTypeGraph().getInitializableDescendants("java.util.Map");
-    Assert.assertTrue("The initializable descendants list of type java.util.Map: \n" + dList, dList.contains("java.util.HashMap"));
+    List<String> dList = od.getTypeGraph().getInstantiableDescendants("java.util.Map");
+    Assert.assertTrue("The instantiable descendants list of type java.util.Map: \n" + dList, dList.contains("java.util.HashMap"));
+    Assert.assertTrue("The instantiable descendants list of type java.util.Map: \n" + dList, !dList.contains(AbstractMap.class.getName()));
 
-    dList = od.getTypeGraph().getInitializableDescendants("java.util.List");
-    Assert.assertTrue("The initializable descendants list of type java.util.List: \n" + dList, dList.contains("java.util.ArrayList"));
-
-    dList = od.getTypeGraph().getInitializableDescendants("java.util.HashMap");
-    Assert.assertTrue("The initializable descendants list of type java.util.HashMap: \n" + dList, dList.contains("java.util.HashMap"));
+    dList = od.getTypeGraph().getInstantiableDescendants("java.util.List");
+    Assert.assertTrue("The instantiable descendants list of type java.util.List: \n" + dList, dList.contains("java.util.ArrayList"));
+    Assert.assertTrue("The instantiable descendants list of type java.util.List: \n" + dList, !dList.contains(AbstractList.class.getName()));
 
 
     String[] jdkQueue = new String[] {DelayQueue.class.getName(), LinkedBlockingDeque.class.getName(),
         LinkedBlockingQueue.class.getName(), PriorityBlockingQueue.class.getName(), SynchronousQueue.class.getName()};
-    List<String> actualQueueClass = od.getTypeGraph().getInitializableDescendants("java.util.concurrent.BlockingQueue");
+    List<String> actualQueueClass = od.getTypeGraph().getInstantiableDescendants("java.util.concurrent.BlockingQueue");
 
 
     for (String expectedClass : jdkQueue) {
@@ -325,7 +435,7 @@ public class OperatorDiscoveryTest
 
     List<String> expectedNumberClasses = Lists.newArrayList(Byte.class.getName(), Short.class.getName(), Long.class.getName(), Integer.class.getName(), Double.class.getName(), Float.class.getName());
 
-    List<String> actualNumberClasses = od.getTypeGraph().getInitializableDescendants(Number.class.getName());
+    List<String> actualNumberClasses = od.getTypeGraph().getInstantiableDescendants(Number.class.getName());
 
     Assert.assertTrue("Actual Number types: " + actualNumberClasses.toString() + "\n Expected contained types: " + expectedNumberClasses, actualNumberClasses.containsAll(expectedNumberClasses));
 
@@ -472,7 +582,7 @@ public class OperatorDiscoveryTest
     private Structured[] structuredArray;
     private T[] genericArray;
     private Map<String, List<Map<String, Number>>> nestedParameterizedType = new HashMap<String, List<Map<String, Number>>>();
-    private Map<? extends Object, ? super Long> wildcardType = new HashMap<Object, Number>();
+    private Map<?, ? super Long> wildcardType = new HashMap<Object, Number>();
     private List<int[]> listofIntArray = new LinkedList<int[]>();
     private List<T> parameterizedTypeVariable = new LinkedList<T>();
     private Z genericType;

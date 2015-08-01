@@ -13,10 +13,6 @@
 
   <name>Apex Application Maven archetype</name>
 
-  <properties>
-    <maven.deploy.skip>false</maven.deploy.skip>
-  </properties>
-
   <build>
     <extensions>
       <extension>
@@ -25,6 +21,13 @@
         <version>2.2</version>
       </extension>
     </extensions>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+      </plugin>
+    </plugins>
 
     <pluginManagement>
       <plugins>

@@ -13,9 +13,19 @@
   <name>DataTorrent API</name>
   <packaging>jar</packaging>
 
-  <properties>
-    <maven.deploy.skip>false</maven.deploy.skip>
-  </properties>
+  <repositories>
+    <repository>
+      <id>ossrh</id>
+      <name>Sonatype Snapshot Repository</name>
+      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+      <snapshots>
+        <updatePolicy>daily</updatePolicy>
+      </snapshots>
+      <releases>
+        <updatePolicy>daily</updatePolicy>
+      </releases>
+    </repository>
+  </repositories>
 
   <dependencies>
     <dependency>
@@ -64,7 +74,17 @@
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>netlet</artifactId>
-      <version>1.0.0</version>
+      <version>1.1.0</version>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+
 </project>

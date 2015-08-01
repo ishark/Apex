@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,7 +15,6 @@
  */
 package com.datatorrent.stram;
 
-import com.datatorrent.stram.api.AppDataSource;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -62,11 +61,13 @@ import org.apache.hadoop.yarn.webapp.WebApp;
 import org.apache.hadoop.yarn.webapp.WebApps;
 
 import com.datatorrent.api.Attribute;
+import com.datatorrent.api.AutoMetric;
 import com.datatorrent.api.Context.DAGContext;
 import com.datatorrent.api.DAG;
 import com.datatorrent.api.StringCodec;
 
 import com.datatorrent.stram.StreamingContainerManager.ContainerResource;
+import com.datatorrent.stram.api.AppDataSource;
 import com.datatorrent.stram.api.BaseContext;
 import com.datatorrent.stram.api.StramEvent;
 import com.datatorrent.stram.appdata.AppDataPushAgent;
@@ -138,21 +139,21 @@ public class StreamingAppMasterService extends CompositeService
   protected class ClusterAppStats extends AppInfo.AppStats
   {
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public int getAllocatedContainers()
     {
       return allocatedContainers.size();
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public int getPlannedContainers()
     {
       return dnmgr.getPhysicalPlan().getContainers().size();
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     @XmlElement
     public int getFailedContainers()
@@ -160,7 +161,7 @@ public class StreamingAppMasterService extends CompositeService
       return numFailedContainers.get();
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public int getNumOperators()
     {
@@ -186,7 +187,7 @@ public class StreamingAppMasterService extends CompositeService
       return StreamingContainerManager.toWsWindowId(dnmgr.getCommittedWindowId());
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTuplesProcessedPSMA()
     {
@@ -197,7 +198,7 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTotalTuplesProcessed()
     {
@@ -208,7 +209,7 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTuplesEmittedPSMA()
     {
@@ -219,7 +220,7 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTotalTuplesEmitted()
     {
@@ -230,7 +231,7 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTotalMemoryAllocated()
     {
@@ -241,7 +242,49 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
+    @Override
+    public long getMemoryRequired()
+    {
+      long result = 0;
+      for (PTContainer c : dnmgr.getPhysicalPlan().getContainers()) {
+        if (c.getExternalId() == null || c.getState() == PTContainer.State.KILLED) {
+          result += c.getRequiredMemoryMB();
+        }
+      }
+      return result;
+    }
+
+    @AutoMetric
+    @Override
+    public int getTotalVCoresAllocated()
+    {
+      int result = 0;
+      for (PTContainer c : dnmgr.getPhysicalPlan().getContainers()) {
+        result += c.getAllocatedVCores();
+      }
+      return result;
+    }
+
+    @AutoMetric
+    @Override
+    public int getVCoresRequired()
+    {
+      int result = 0;
+      for (PTContainer c : dnmgr.getPhysicalPlan().getContainers()) {
+        if (c.getExternalId() == null || c.getState() == PTContainer.State.KILLED) {
+          if (c.getRequiredVCores() == 0) {
+            result++;
+          }
+          else {
+            result += c.getRequiredVCores();
+          }
+        }
+      }
+      return result;
+    }
+
+    @AutoMetric
     @Override
     public long getTotalBufferServerReadBytesPSMA()
     {
@@ -254,7 +297,7 @@ public class StreamingAppMasterService extends CompositeService
       return result;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getTotalBufferServerWriteBytesPSMA()
     {
@@ -274,12 +317,18 @@ public class StreamingAppMasterService extends CompositeService
       return (criticalPathInfo == null) ? null : criticalPathInfo.path;
     }
 
-    @AppDataPushAgent.Metric
+    @AutoMetric
     @Override
     public long getLatency()
     {
       StreamingContainerManager.CriticalPathInfo criticalPathInfo = dnmgr.getCriticalPathInfo();
       return (criticalPathInfo == null) ? 0 : criticalPathInfo.latency;
+    }
+
+    @Override
+    public long getWindowStartMillis()
+    {
+      return dnmgr.getWindowStartMillis();
     }
 
   }
@@ -381,10 +430,10 @@ public class StreamingAppMasterService extends CompositeService
     }
 
     @Override
-    public Map<String, Object> getCustomMetrics()
+    public Map<String, Object> getMetrics()
     {
       if (StreamingAppMasterService.this.dnmgr != null) {
-        return (Map)StreamingAppMasterService.this.dnmgr.getCustomMetrics();
+        return (Map)StreamingAppMasterService.this.dnmgr.getLatestLogicalMetrics();
       }
       return null;
     }
@@ -500,7 +549,7 @@ public class StreamingAppMasterService extends CompositeService
   protected void serviceStart() throws Exception
   {
     super.serviceStart();
-    if (delegationTokenManager != null) {
+    if (UserGroupInformation.isSecurityEnabled()) {
       delegationTokenManager.startThreads();
     }
 
@@ -539,7 +588,7 @@ public class StreamingAppMasterService extends CompositeService
   protected void serviceStop() throws Exception
   {
     super.serviceStop();
-    if (delegationTokenManager != null) {
+    if (UserGroupInformation.isSecurityEnabled()) {
       delegationTokenManager.stopThreads();
     }
     if (nmClient != null) {
@@ -594,7 +643,9 @@ public class StreamingAppMasterService extends CompositeService
     // Dump out information about cluster capability as seen by the resource manager
     int maxMem = response.getMaximumResourceCapability().getMemory();
     int maxVcores = response.getMaximumResourceCapability().getVirtualCores();
-    LOG.info("Max mem {}m and vcores {} capabililty of resources in this cluster ", maxMem, maxVcores);
+    int minMem = conf.getInt("yarn.scheduler.minimum-allocation-mb", 0);
+    int minVcores = conf.getInt("yarn.scheduler.minimum-allocation-vcores", 0);
+    LOG.info("Max mem {}m, Min mem {}m, Max vcores {} and Min vcores {} capabililty of resources in this cluster ", maxMem, minMem, maxVcores, minVcores);
 
     // for locality relaxation fall back
     Map<StreamingContainerAgent.ContainerStartRequest, MutablePair<Integer, ContainerRequest>> requestedResources = Maps.newHashMap();
@@ -694,9 +745,15 @@ public class StreamingAppMasterService extends CompositeService
             LOG.warn("Container memory {}m above max threshold of cluster. Using max value {}m.", csr.container.getRequiredMemoryMB(), maxMem);
             csr.container.setRequiredMemoryMB(maxMem);
           }
+          if(csr.container.getRequiredMemoryMB() < minMem){
+            csr.container.setRequiredMemoryMB(minMem);
+          }
           if (csr.container.getRequiredVCores() > maxVcores) {
             LOG.warn("Container vcores {} above max threshold of cluster. Using max value {}.", csr.container.getRequiredVCores(), maxVcores);
             csr.container.setRequiredVCores(maxVcores);
+          }
+          if(csr.container.getRequiredVCores() < minVcores){
+            csr.container.setRequiredVCores(minVcores);
           }
           csr.container.setResourceRequestPriority(nextRequestPriority++);
           ContainerRequest cr = resourceRequestor.createContainerRequest(csr, true);
@@ -928,7 +985,7 @@ public class StreamingAppMasterService extends CompositeService
   /**
    * Ask RM to allocate given no. of containers to this Application Master
    *
-   * @param containerRequests  Containers to ask for from RM
+   * @param containerRequests        Containers to ask for from RM
    * @param removedContainerRequests Container requests to be removed
    * @param releasedContainers
    * @return Response from RM to AM with allocated containers

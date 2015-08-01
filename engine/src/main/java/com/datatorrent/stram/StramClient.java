@@ -18,13 +18,11 @@ package com.datatorrent.stram;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-import com.google.common.base.Joiner;
 import com.google.common.base.Objects;
 import com.google.common.collect.Lists;
 
@@ -39,10 +37,7 @@ import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.io.DataOutputBuffer;
-import org.apache.hadoop.io.Text;
-import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.Credentials;
-import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.util.JarFinder;
@@ -52,7 +47,6 @@ import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.hadoop.yarn.client.api.YarnClientApplication;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
-import org.apache.hadoop.yarn.security.client.RMDelegationTokenIdentifier;
 import org.apache.hadoop.yarn.util.ConverterUtils;
 import org.apache.hadoop.yarn.util.Records;
 import org.apache.log4j.DTLoggerFactory;
@@ -79,13 +73,6 @@ public class StramClient
   private static final Logger LOG = LoggerFactory.getLogger(StramClient.class);
   public static final String YARN_APPLICATION_TYPE = "DataTorrent";
   public static final String LIB_JARS_SEP = ",";
-
-  // TODO: HADOOP UPGRADE - replace with YarnConfiguration constants
-  private static final String RM_HA_PREFIX = YarnConfiguration.RM_PREFIX + "ha.";
-  private static final String RM_HA_IDS = RM_HA_PREFIX + "rm-ids";
-  private static final String RM_HA_ENABLED = RM_HA_PREFIX + "enabled";
-  private static final boolean DEFAULT_RM_HA_ENABLED = false;
-  private static final String RM_HOSTNAME_PREFIX = YarnConfiguration.RM_PREFIX + "hostname.";
 
   // Configuration
   private final Configuration conf;
@@ -117,6 +104,7 @@ public class StramClient
       com.datatorrent.bufferserver.server.Server.class,
       com.datatorrent.stram.StreamingAppMaster.class,
       com.datatorrent.api.StreamCodec.class,
+      com.datatorrent.common.util.FSStorageAgent.class,
       javax.validation.ConstraintViolationException.class,
       com.ning.http.client.websocket.WebSocketUpgradeHandler.class,
       com.esotericsoftware.kryo.Kryo.class,
@@ -130,13 +118,15 @@ public class StramClient
       org.apache.http.client.utils.URLEncodedUtils.class,
       org.apache.http.message.BasicHeaderValueParser.class,
       com.esotericsoftware.minlog.Log.class,
-      org.objectweb.asm.tree.ClassNode.class,
-      org.mozilla.javascript.Scriptable.class
-    };
+      org.apache.xbean.asm5.tree.ClassNode.class,
+      org.mozilla.javascript.Scriptable.class,
+      // The jersey client inclusion is only for Hadoop-2.2 and should be removed when we upgrade our Hadoop
+      // dependency version since Hadoop-2.3 onwards has jersey client bundled
+      com.sun.jersey.client.apache4.ApacheHttpClient4Handler.class
+  };
 
   private static final Class<?>[] DATATORRENT_SECURITY_SPECIFIC_CLASSES = new Class<?>[]{
-      com.sun.jersey.client.apache4.ApacheHttpClient4Handler.class
-    };
+  };
 
   private static final Class<?>[] DATATORRENT_SECURITY_CLASSES =
   (Class<?>[]) ArrayUtils.addAll(DATATORRENT_CLASSES, DATATORRENT_SECURITY_SPECIFIC_CLASSES);
@@ -300,51 +290,6 @@ public class StramClient
 
   }
 
-  // TODO: HADOOP UPGRADE - replace with YarnConfiguration constants
-  private Token<RMDelegationTokenIdentifier> getRMHAToken(org.apache.hadoop.yarn.api.records.Token rmDelegationToken) {
-    // Build a list of service addresses to form the service name
-    ArrayList<String> services = new ArrayList<String>();
-    for (String rmId : conf.getStringCollection(RM_HA_IDS)) {
-      LOG.info("Yarn Resource Manager id: {}", rmId);
-      // Set RM_ID to get the corresponding RM_ADDRESS
-      services.add(SecurityUtil.buildTokenService(NetUtils.createSocketAddr(
-              conf.get(RM_HOSTNAME_PREFIX + rmId),
-              YarnConfiguration.DEFAULT_RM_PORT,
-              RM_HOSTNAME_PREFIX + rmId)).toString());
-    }
-    Text rmTokenService = new Text(Joiner.on(',').join(services));
-
-    return new Token<RMDelegationTokenIdentifier>(
-            rmDelegationToken.getIdentifier().array(),
-            rmDelegationToken.getPassword().array(),
-            new Text(rmDelegationToken.getKind()),
-            rmTokenService);
-  }
-
-  private void addRMDelegationToken(final String renewer, final Credentials credentials) throws IOException, YarnException {
-    // Get the ResourceManager delegation rmToken
-    final org.apache.hadoop.yarn.api.records.Token rmDelegationToken = yarnClient.getRMDelegationToken(new Text(renewer));
-
-    Token<RMDelegationTokenIdentifier> token;
-    // TODO: Use the utility method getRMDelegationTokenService in ClientRMProxy to remove the separate handling of
-    // TODO: HA and non-HA cases when hadoop dependency is changed to hadoop 2.4 or above
-    if (conf.getBoolean(RM_HA_ENABLED, DEFAULT_RM_HA_ENABLED)) {
-      LOG.info("Yarn Resource Manager HA is enabled");
-      token = getRMHAToken(rmDelegationToken);
-    } else {
-      LOG.info("Yarn Resource Manager HA is not enabled");
-      InetSocketAddress rmAddress = conf.getSocketAddr(YarnConfiguration.RM_ADDRESS,
-              YarnConfiguration.DEFAULT_RM_ADDRESS,
-              YarnConfiguration.DEFAULT_RM_PORT);
-
-      token = ConverterUtils.convertFromYarn(rmDelegationToken, rmAddress);
-    }
-
-    LOG.info("RM dt {}", token);
-
-    credentials.addToken(token.getService(), token);
-  }
-
   /**
    * Launch application for the dag represented by this client.
    *
@@ -461,7 +406,7 @@ public class StramClient
         fs.close();
       }
 
-      addRMDelegationToken(tokenRenewer, credentials);
+      new ClientRMHelper(yarnClient, conf).addRMDelegationToken(tokenRenewer, credentials);
 
       DataOutputBuffer dob = new DataOutputBuffer();
       credentials.writeTokenStorageToStream(dob);
@@ -478,8 +423,13 @@ public class StramClient
     FileSystem fs = StramClientUtils.newFileSystemInstance(conf);
     try {
       Path appsBasePath = new Path(StramClientUtils.getDTDFSRootDir(fs, conf), StramClientUtils.SUBDIR_APPS);
-      Path appPath = new Path(appsBasePath, appId.toString());
-
+      Path appPath;
+      String configuredAppPath = dag.getValue(LogicalPlan.APPLICATION_PATH);
+      if (configuredAppPath == null) {
+        appPath = new Path(appsBasePath, appId.toString());
+      } else {
+        appPath = new Path(configuredAppPath);
+      }
       String libJarsCsv = copyFromLocal(fs, appPath, localJarFiles.toArray(new String[]{}));
 
       LOG.info("libjars: {}", libJarsCsv);
@@ -713,7 +663,7 @@ public class StramClient
       }
 
     };
-    ClientRMHelper rmClient = new ClientRMHelper(yarnClient);
+    ClientRMHelper rmClient = new ClientRMHelper(yarnClient, conf);
     return rmClient.waitForCompletion(appId, callback, clientTimeout);
   }
 

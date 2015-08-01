@@ -15,16 +15,22 @@
  */
 package com.datatorrent.stram.engine;
 
+import java.beans.IntrospectionException;
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import org.apache.hadoop.util.ReflectionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,6 +98,8 @@ public abstract class Node<OPERATOR extends Operator> implements Component<Opera
   public final OperatorContext context;
   public final BlockingQueue<StatsListener.OperatorResponse> commandResponse;
   private final List<Field> metricFields;
+  private final Map<String, Method> metricMethods;
+  protected Stats.CheckpointStats checkpointStats;
 
   public Node(OPERATOR operator, OperatorContext context)
   {
@@ -108,11 +116,26 @@ public abstract class Node<OPERATOR extends Operator> implements Component<Opera
     commandResponse = new LinkedBlockingQueue<StatsListener.OperatorResponse>();
 
     metricFields = Lists.newArrayList();
-    for (Field field : operator.getClass().getDeclaredFields()) {
-      if (field.isAnnotationPresent(CustomMetric.class)) {
+    for (Field field : ReflectionUtils.getDeclaredFieldsIncludingInherited(operator.getClass())) {
+      if (field.isAnnotationPresent(AutoMetric.class)) {
         metricFields.add(field);
         field.setAccessible(true);
       }
+    }
+
+    metricMethods = Maps.newHashMap();
+    try {
+      for (PropertyDescriptor pd : Introspector.getBeanInfo(operator.getClass()).getPropertyDescriptors()) {
+        Method readMethod = pd.getReadMethod();
+        if (readMethod != null) {
+          AutoMetric rfa = readMethod.getAnnotation(AutoMetric.class);
+          if (rfa != null) {
+            metricMethods.put(pd.getName(), readMethod);
+          }
+        }
+      }
+    } catch (IntrospectionException e) {
+      throw new RuntimeException("introspecting {}", e);
     }
   }
 
@@ -346,10 +369,17 @@ public abstract class Node<OPERATOR extends Operator> implements Component<Opera
         }
         metricValues.put(field.getName(), field.get(operator));
       }
+
+      for (Map.Entry<String, Method> methodEntry : metricMethods.entrySet()) {
+        if (context.metricsToSend != null && !context.metricsToSend.contains(methodEntry.getKey())) {
+          continue;
+        }
+        metricValues.put(methodEntry.getKey(), methodEntry.getValue().invoke(operator));
+      }
+
       context.clearMetrics();
       return metricValues;
-    }
-    catch (IllegalAccessException iae) {
+    } catch (IllegalAccessException | InvocationTargetException iae) {
       throw new RuntimeException(iae);
     }
   }
@@ -371,6 +401,8 @@ public abstract class Node<OPERATOR extends Operator> implements Component<Opera
 
     if (checkpoint != null) {
       stats.checkpoint = checkpoint;
+      stats.checkpointStats = checkpointStats;
+      checkpointStats = null;
       checkpoint = null;
     }
 
@@ -405,7 +437,10 @@ public abstract class Node<OPERATOR extends Operator> implements Component<Opera
       StorageAgent ba = context.getValue(OperatorContext.STORAGE_AGENT);
       if (ba != null) {
         try {
+          checkpointStats = new Stats.CheckpointStats();
+          checkpointStats.checkpointStartTime = System.currentTimeMillis();
           ba.save(operator, id, windowId);
+          checkpointStats.checkpointTime = System.currentTimeMillis() - checkpointStats.checkpointStartTime;
         }
         catch (IOException ie) {
           try {

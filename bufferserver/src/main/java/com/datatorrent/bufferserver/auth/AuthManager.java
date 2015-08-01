@@ -13,25 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.datatorrent.bufferserver.packet;
+package com.datatorrent.bufferserver.auth;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.testng.annotations.Test;
+import java.security.SecureRandom;
 
-
-public class NoMessageTupleTest
+/**
+ * <p>Auth Manager class.</p>
+ */
+public class AuthManager
 {
-  @Test
-  public void testSerDe()
+  private final static int BUFFER_SERVER_TOKEN_LENGTH = 20;
+
+  private static SecureRandom generator = new SecureRandom();
+
+  public static byte[] generateToken()
   {
-    logger.info("testSerDe");
-
-    byte[] serialized = NoMessageTuple.getSerializedTuple();
-    Tuple t = Tuple.getTuple(serialized, 0, serialized.length);
-
-    assert(t.getType() == MessageType.NO_MESSAGE);
+    byte[] token = new byte[BUFFER_SERVER_TOKEN_LENGTH];
+    generator.nextBytes(token);
+    return token;
   }
-
-  private static final Logger logger = LoggerFactory.getLogger(NoMessageTupleTest.class);
 }

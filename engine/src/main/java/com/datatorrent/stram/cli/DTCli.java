@@ -16,6 +16,7 @@
 package com.datatorrent.stram.cli;
 
 import java.io.*;
+import java.lang.NoClassDefFoundError;
 import java.lang.management.ManagementFactory;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -1444,9 +1445,12 @@ public class DTCli
               try {
                 command.execute(args, reader);
                 lastCommandError = false;
-              }
-              catch (Exception e) {
+              } catch (Exception e) {
                 handleException(e);
+              } catch (Error e) {
+                handleException(e);
+                System.err.println("Fatal error encountered");
+                System.exit(1);
               }
             }
 
@@ -1455,29 +1459,20 @@ public class DTCli
           commandThread.start();
           try {
             commandThread.join();
-          }
-          catch (InterruptedException ex) {
+          } catch (InterruptedException ex) {
             System.err.println("Interrupted");
           }
           commandThread = null;
         }
       }
-    }
-    catch (Exception e) {
+    } catch (Exception e) {
       handleException(e);
     }
   }
 
-  private void handleException(Exception e)
+  private void handleException(Throwable e)
   {
-    String msg = e.getMessage();
-    Throwable cause = e.getCause();
-    if (cause != null && cause.getMessage() != null) {
-      msg += ": " + cause.getMessage();
-    }
-    if (msg != null) {
-      System.err.println(msg);
-    }
+    System.err.println(ExceptionUtils.getFullStackTrace(e));
     LOG.error("Exception caught: ", e);
     lastCommandError = true;
   }
@@ -1858,8 +1853,8 @@ public class DTCli
             config.set(StramAppLauncher.ORIGINAL_APP_ID, commandLineInfo.origAppId);
           }
           config.set(StramAppLauncher.QUEUE_NAME, commandLineInfo.queue != null ? commandLineInfo.queue : "default");
-        } catch (Throwable t) {
-          throw new CliException("Error opening the config XML file: " + configFile, t);
+        } catch (Exception ex) {
+          throw new CliException("Error opening the config XML file: " + configFile, ex);
         }
         String fileName = expandFileName(commandLineInfo.args[0], true);
         StramAppLauncher submitApp;
@@ -1946,7 +1941,7 @@ public class DTCli
                 appFactory = new StramAppLauncher.JsonFileAppFactory(file);
               }
             }
-          } catch (Throwable t) {
+          } catch (Exception | NoClassDefFoundError ex) {
             // ignore
           }
         }
@@ -2420,7 +2415,7 @@ public class DTCli
     public void execute(String[] args, ConsoleReader reader) throws Exception
     {
       try {
-        printJson(getResource(StramWebServices.PATH_SHUTDOWN, currentApp));
+        printJson(getResource(StramWebServices.PATH_PHYSICAL_PLAN, currentApp));
       } catch (Exception e) {
         throw new CliException("Failed web service request for appid " + currentApp.getApplicationId().toString(), e);
       }
@@ -2491,10 +2486,10 @@ public class DTCli
       };
 
       try {
-        ClientRMHelper clientRMHelper = new ClientRMHelper(yarnClient);
+        ClientRMHelper clientRMHelper = new ClientRMHelper(yarnClient, conf);
         boolean result = clientRMHelper.waitForCompletion(currentApp.getApplicationId(), cb, timeout * 1000);
         if (!result) {
-          System.err.println("Application terminated unsucessful.");
+          System.err.println("Application terminated unsuccessfully.");
         }
       }
       catch (YarnException e) {
@@ -3025,8 +3020,9 @@ public class DTCli
             operatorDiscoverer.buildPortClassHier(oper, portClassHier);
 
             arr.put(oper);
-          } catch (Throwable t) {
+          } catch (Exception | NoClassDefFoundError ex) {
             // ignore this class
+
             final String cls = clazz, ex = t.toString();
             failed.put(cls, ex);
           }
