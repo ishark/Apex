@@ -547,4 +547,114 @@ public class StreamPersistanceTests {
     console1.results.clear();
   }
 
+  public static class TestPartitionCodec extends JsonStreamCodec<Object> implements Serializable {
+
+    @Override
+    public int getPartition(Object o) {
+      return (Integer) o & 0x03;
+    }
+
+  }
+
+  public static class PartitionedTestOperatorWithFiltering extends BaseOperator implements Partitioner<PassThruOperatorWithCodec> {
+
+    public PartitionedTestOperatorWithFiltering() {
+    }
+
+    public final transient DefaultInputPort<Object> input = new DefaultInputPort<Object>() {
+      @Override
+      public void process(Object tuple) {
+        output.emit(tuple);
+      }
+
+      @Override
+      public StreamCodec<Object> getStreamCodec() {
+        return new TestPartitionCodec();
+      }
+    };
+
+    public final transient DefaultOutputPort<Object> output = new DefaultOutputPort<Object>();
+
+    @Override
+    public Collection definePartitions(Collection partitions, PartitioningContext context) {
+      Collection<Partition> newPartitions = new ArrayList<Partition>();
+
+      int partitionMask = 0x03;
+
+      // No partitioning done so far..
+      // Single partition again, but with only even numbers ok?
+      // First partition
+      PassThruOperatorWithCodec newInstance = new PassThruOperatorWithCodec();
+      Partition partition = new DefaultPartition<PassThruOperatorWithCodec>(newInstance);
+      PartitionKeys value = new PartitionKeys(partitionMask, Sets.newHashSet(0));
+      partition.getPartitionKeys().put(input, value);
+      newPartitions.add(partition);
+
+      // Second partition
+      newInstance = new PassThruOperatorWithCodec();
+      partition = new DefaultPartition<PassThruOperatorWithCodec>(newInstance);
+      value = new PartitionKeys(partitionMask, Sets.newHashSet(1));
+      partition.getPartitionKeys().put(input, value);
+
+      newPartitions.add(partition);
+
+      return newPartitions;
+    }
+
+    @Override
+    public void partitioned(Map partitions) {
+      // TODO Auto-generated method stub
+
+    }
+  }
+
+  @Test
+  public void testPersistStreamOperatorMultiplePhysicalOperatorsForSink() throws ClassNotFoundException, IOException {
+    LogicalPlan dag = new LogicalPlan();
+    AscendingNumbersOperator ascend = dag.addOperator("ascend", new AscendingNumbersOperator());
+    PartitionedTestOperatorWithFiltering passThru = dag.addOperator("partition", new PartitionedTestOperatorWithFiltering());
+    final TestRecieverOperator console = dag.addOperator("console", new TestRecieverOperator());
+    final TestPersistanceOperator console1 = new TestPersistanceOperator();
+    StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
+    s.persist(console1, console1.inport);
+    dag.addStream("Stream2", passThru.output, console.inport);
+
+    final StramLocalCluster lc = new StramLocalCluster(dag);
+
+    new Thread("LocalClusterController") {
+      @Override
+      public void run() {
+        long startTms = System.currentTimeMillis();
+        long timeout = 100000L;
+        try {
+          while (System.currentTimeMillis() - startTms < timeout) {
+            if ((console.results.size() < 6) || (console1.results.size() < 6)) {
+              Thread.sleep(10);
+            } else {
+              break;
+            }
+          }
+        } catch (Exception ex) {
+          DTThrowable.rethrow(ex);
+        } finally {
+          lc.shutdown();
+        }
+      }
+
+    }.start();
+
+    lc.run();
+
+    String[] expectedResult = { "0", "1", "4", "5", "8", "9", "12", "13", "16" };
+
+    for (int i = 0; i < expectedResult.length; i++) {
+      LOG.debug(console1.results.get(i) + " " + expectedResult[i]);
+      assertEquals("Mismatch observed for tuple ", expectedResult[i], console1.results.get(i));
+    }
+
+    console1.results.clear();
+    console.results.clear();
+
+  }
+
 }
