@@ -30,7 +30,7 @@ import java.beans.*;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.*;
+//import java.lang.reflect.*;
 import java.net.*;
 import java.util.*;
 import java.util.Map.Entry;
@@ -72,7 +72,7 @@ public class OperatorDiscoverer
 
   private final Map<String, OperatorClassInfo> classInfo = new HashMap<String, OperatorClassInfo>();
 
-  private static class OperatorClassInfo {
+  public static class OperatorClassInfo {
     String comment;
     final Map<String, String> tags = new HashMap<String, String>();
     final Map<String, String> getMethods = new HashMap<String, String>();
@@ -145,7 +145,7 @@ public class OperatorDiscoverer
     @Override
     public void endElement(String uri, String localName, String qName) throws SAXException {
       if (qName.equalsIgnoreCase("class")) {
-        classInfo.put(className, oci);
+        getClassInfo().put(className, oci);
         className = null;
         oci = null;
       }
@@ -300,7 +300,7 @@ public class OperatorDiscoverer
       @Override
       public boolean apply(String className)
       {
-        OperatorClassInfo oci = classInfo.get(className);
+        OperatorClassInfo oci = getClassInfo().get(className);
         return oci == null || !oci.tags.containsKey("@omitFromUI");
       }
     });
@@ -324,7 +324,7 @@ public class OperatorDiscoverer
             result.add(clazz);
           }
           else {
-            OperatorClassInfo oci = classInfo.get(clazz);
+            OperatorClassInfo oci = getClassInfo().get(clazz);
             if (oci != null) {
               if (oci.comment != null && oci.comment.toLowerCase().contains(searchTerm)) {
                 result.add(clazz);
@@ -363,7 +363,7 @@ public class OperatorDiscoverer
   public JSONObject describeOperator(String clazz) throws Exception
   {
     TypeGraphVertex tgv = typeGraph.getTypeGraphVertex(clazz);
-    if (tgv.isInitializable()) {
+    if (tgv.isInstantiable()) {
       JSONObject response = new JSONObject();
       JSONArray inputPorts = new JSONArray();
       JSONArray outputPorts = new JSONArray();
@@ -407,7 +407,7 @@ public class OperatorDiscoverer
         response.put("inputPorts", inputPorts);
         response.put("outputPorts", outputPorts);
 
-        OperatorClassInfo oci = classInfo.get(clazz);
+        OperatorClassInfo oci = getClassInfo().get(clazz);
 
         if (oci != null) {
           if (oci.comment != null) {
@@ -496,7 +496,7 @@ public class OperatorDiscoverer
   private void putFieldDescription(CompactFieldNode field, JSONObject port,
       TypeGraphVertex tgv) throws JSONException {
 
-    OperatorClassInfo oci = classInfo.get(tgv.typeName);
+    OperatorClassInfo oci = getClassInfo().get(tgv.typeName);
     if (oci != null) {
       String fieldDesc = oci.fields.get(field.getName());
       if (fieldDesc != null) {
@@ -543,7 +543,7 @@ public class OperatorDiscoverer
   }
 
   private OperatorClassInfo getOperatorClassWithGetterSetter(TypeGraphVertex tgv, String setterName, String getterName) {
-    OperatorClassInfo oci = classInfo.get(tgv.typeName);
+    OperatorClassInfo oci = getClassInfo().get(tgv.typeName);
     if(oci != null && (oci.getMethods.containsKey(getterName) || oci.setMethods.containsKey(setterName))){
       return oci;
     } else {
@@ -568,93 +568,9 @@ public class OperatorDiscoverer
     return typeGraph.describeClass(clazzName);
   }
 
-
-
-  public JSONObject describeClass(Class<?> clazz) throws Exception
-  {
-    JSONObject desc = new JSONObject();
-    desc.put("name", clazz.getName());
-    if (clazz.isEnum()) {
-      @SuppressWarnings("unchecked")
-      Class<Enum<?>> enumClass = (Class<Enum<?>>)clazz;
-      ArrayList<String> enumNames = Lists.newArrayList();
-      for (Enum<?> e : enumClass.getEnumConstants()) {
-        enumNames.add(e.name());
-      }
-      desc.put("enum", enumNames);
-    }
-    UI_TYPE ui_type = UI_TYPE.getEnumFor(clazz);
-    if(ui_type!=null){
-      desc.put("uiType", ui_type.getName());
-    }
-    desc.put("properties", getClassProperties(clazz, 0));
-    return desc;
-  }
-
-
   private static String getDocName(String clazz)
   {
     return clazz.replace('.', '/').replace('$', '.') + ".html";
-  }
-
-  private JSONArray getClassProperties(Class<?> clazz, int level) throws IntrospectionException
-  {
-    JSONArray arr = new JSONArray();
-    TypeDiscoverer td = new TypeDiscoverer();
-    try {
-      for (PropertyDescriptor pd : Introspector.getBeanInfo(clazz).getPropertyDescriptors()) {
-        Method readMethod = pd.getReadMethod();
-        if (readMethod != null) {
-          if (readMethod.getDeclaringClass() == java.lang.Enum.class) {
-            // skip getDeclaringClass
-            continue;
-          } else if ("class".equals(pd.getName())) {
-            // skip getClass
-            continue;
-          }
-        } else {
-          // yields com.datatorrent.api.Context on JDK6 and com.datatorrent.api.Context.OperatorContext with JDK7
-          if ("up".equals(pd.getName()) && com.datatorrent.api.Context.class.isAssignableFrom(pd.getPropertyType())) {
-            continue;
-          }
-        }
-        //LOG.info("name: " + pd.getName() + " type: " + pd.getPropertyType());
-
-          Class<?> propertyType = pd.getPropertyType();
-          if (propertyType != null) {
-            JSONObject propertyObj = new JSONObject();
-            propertyObj.put("name", pd.getName());
-            propertyObj.put("canGet", readMethod != null);
-            propertyObj.put("canSet", pd.getWriteMethod() != null);
-            if (readMethod != null) {
-              for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
-                OperatorClassInfo oci = classInfo.get(c.getName());
-                if (oci != null) {
-                  String getMethodDesc = oci.getMethods.get(readMethod.getName());
-                  if (getMethodDesc != null) {
-                    propertyObj.put("description", oci.getMethods.get(readMethod.getName()));
-                    break;
-                  }
-                }
-              }
-              // type can be a type symbol or parameterized type
-              td.setTypeArguments(clazz, readMethod.getGenericReturnType(), propertyObj);
-            } else {
-              if (pd.getWriteMethod() != null) {
-                td.setTypeArguments(clazz, pd.getWriteMethod().getGenericParameterTypes()[0], propertyObj);
-              }
-            }
-            //if (!propertyType.isPrimitive() && !propertyType.isEnum() && !propertyType.isArray() && !propertyType.getName().startsWith("java.lang") && level < MAX_PROPERTY_LEVELS) {
-            //  propertyObj.put("properties", getClassProperties(propertyType, level + 1));
-            //}
-            arr.put(propertyObj);
-          }
-      }
-    }
-    catch (JSONException ex) {
-      throw new RuntimeException(ex);
-    }
-    return arr;
   }
 
   private static final Pattern CAPS = Pattern.compile("([A-Z\\d][^A-Z\\d]*)");
@@ -698,51 +614,63 @@ public class OperatorDiscoverer
         }
 
         try {
-          // load the port type class
-          Class<?> portClazz = classLoader.loadClass(type.replaceAll("\\bclass ", "").replaceAll("\\binterface ", ""));
-
-          // iterate up the class hierarchy to populate the portClassHier map
-          while (portClazz != null) {
-            ArrayList<String> parents = new ArrayList<String>();
-
-            String portClazzName = portClazz.toString();
-            if (portClassHier.has(portClazzName)) {
-              // already present in portClassHier, so we can stop
-              break;
-            }
-
-            // interfaces and Object are at the top of the tree, so we can just put them
-            // in portClassHier with empty parents, then move on.
-            if (portClazz.isInterface() || portClazzName.equals("java.lang.Object")) {
-              portClassHier.put(portClazzName, parents);
-              break;
-            }
-
-            // look at superclass first
-            Class<?> superClazz = portClazz.getSuperclass();
-            try {
-              String superClazzName = superClazz.toString();
-              parents.add(superClazzName);
-            } catch (NullPointerException e) {
-              LOG.info("Superclass is null for `{}` ({})", portClazz, superClazz);
-            }
-            // then look at interfaces implemented in this port
-            for (Class<?> intf : portClazz.getInterfaces()) {
-              String intfName = intf.toString();
-              if (!portClassHier.has(intfName)) {
-                // add the interface to portClassHier
-                portClassHier.put(intfName, new ArrayList<String>());
-              }
-              parents.add(intfName);
-            }
-
-            // now store class=>parents mapping in portClassHier
-            portClassHier.put(portClazzName, parents);
-
-            // walk up the hierarchy for the next iteration
-            portClazz = superClazz;
+          if (portClassHier.has(type)) {
+            // already present in portClassHier, so we can stop
+            return;
           }
-        } catch (ClassNotFoundException e) {
+          
+          TypeGraphVertex portTypeVertex  = typeGraph.getTypeGraphVertex(type);
+          ArrayList<String> parents = new ArrayList<String>();
+          for(TypeGraphVertex tgv: portTypeVertex.getAncestors()) {
+            parents.add(tgv.getClassNode().getName());
+          }
+          portClassHier.put(type, parents);
+          
+//          // load the port type class
+//          Class<?> portClazz = classLoader.loadClass(type.replaceAll("\\bclass ", "").replaceAll("\\binterface ", ""));
+//
+//          // iterate up the class hierarchy to populate the portClassHier map
+//          while (portClazz != null) {
+//            ArrayList<String> parents = new ArrayList<String>();
+//
+//            String portClazzName = portClazz.toString();
+//            if (portClassHier.has(portClazzName)) {
+//              // already present in portClassHier, so we can stop
+//              break;
+//            }
+//
+//            // interfaces and Object are at the top of the tree, so we can just put them
+//            // in portClassHier with empty parents, then move on.
+//            if (portClazz.isInterface() || portClazzName.equals("java.lang.Object")) {
+//              portClassHier.put(portClazzName, parents);
+//              break;
+//            }
+//
+//            // look at superclass first
+//            Class<?> superClazz = portClazz.getSuperclass();
+//            try {
+//              String superClazzName = superClazz.toString();
+//              parents.add(superClazzName);
+//            } catch (NullPointerException e) {
+//              LOG.info("Superclass is null for `{}` ({})", portClazz, superClazz);
+//            }
+//            // then look at interfaces implemented in this port
+//            for (Class<?> intf : portClazz.getInterfaces()) {
+//              String intfName = intf.toString();
+//              if (!portClassHier.has(intfName)) {
+//                // add the interface to portClassHier
+//                portClassHier.put(intfName, new ArrayList<String>());
+//              }
+//              parents.add(intfName);
+//            }
+//
+//            // now store class=>parents mapping in portClassHier
+//            portClassHier.put(portClazzName, parents);
+//
+//            // walk up the hierarchy for the next iteration
+//            portClazz = superClazz;
+//          }
+        } catch (Exception e) {
           LOG.info("Could not make class from `{}`", type);
         }
       }
@@ -765,6 +693,10 @@ public class OperatorDiscoverer
   public TypeGraph getTypeGraph()
   {
     return typeGraph;
+  }
+
+  public Map<String, OperatorClassInfo> getClassInfo() {
+    return classInfo;
   }
 
 

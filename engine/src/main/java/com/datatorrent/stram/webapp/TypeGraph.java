@@ -392,7 +392,7 @@ public class TypeGraph
       return null;
     }
     Set<String> result = new TreeSet<String>();
-    for (TypeGraphVertex node : tgv.allInitialiazableDescendants) {
+    for (TypeGraphVertex node : tgv.allInstantiableDescendants) {
       if ((isAncestor(InputOperator.class.getName(), node.typeName) || !getAllInputPorts(node).isEmpty())) {
         result.add(node.typeName);
       }
@@ -506,7 +506,7 @@ public class TypeGraph
     }
 
 
-    private boolean isInstantiable()
+    public boolean isInstantiable()
     {
       return JACKSON_INSTANTIABLE_CLASSES.contains(this.typeName) || (isPublicConcrete() && classNode.getDefaultConstructor() != null);
     }

@@ -3023,8 +3023,8 @@ public class DTCli
           } catch (Exception | NoClassDefFoundError ex) {
             // ignore this class
 
-            final String cls = clazz, ex = t.toString();
-            failed.put(cls, ex);
+            final String cls = clazz;
+            failed.put(cls, ex.toString());
           }
         }
         json.put("operatorClasses", arr);

@@ -15,9 +15,13 @@
  */
 package com.datatorrent.stram.webapp;
 
+import java.beans.IntrospectionException;
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.*;
 import java.util.concurrent.Callable;
@@ -45,8 +49,8 @@ import com.datatorrent.stram.plan.logical.LogicalPlan;
 import com.datatorrent.stram.plan.logical.LogicalPlan.OperatorMeta;
 import com.datatorrent.stram.plan.logical.LogicalPlanConfiguration;
 import com.datatorrent.stram.util.ObjectMapperFactory;
+import com.datatorrent.stram.webapp.OperatorDiscoverer.OperatorClassInfo;
 import com.datatorrent.stram.webapp.TypeDiscoverer.UI_TYPE;
-
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
@@ -151,7 +155,91 @@ public class OperatorDiscoveryTest
       this.circleType = circleType;
     }
   }
+  
+  /*
+   * Method to validate describe class functionality using reflection
+   * Used to check if typeGraph and reflection generate same JSONObject
+   */
+  public JSONObject describeClass(Class<?> clazz, OperatorDiscoverer od) throws Exception
+  {
+    JSONObject desc = new JSONObject();
+    desc.put("name", clazz.getName());
+    if (clazz.isEnum()) {
+      @SuppressWarnings("unchecked")
+      Class<Enum<?>> enumClass = (Class<Enum<?>>)clazz;
+      ArrayList<String> enumNames = Lists.newArrayList();
+      for (Enum<?> e : enumClass.getEnumConstants()) {
+        enumNames.add(e.name());
+      }
+      desc.put("enum", enumNames);
+    }
+    UI_TYPE ui_type = UI_TYPE.getEnumFor(clazz);
+    if(ui_type!=null){
+      desc.put("uiType", ui_type.getName());
+    }
+    desc.put("properties", getClassProperties(clazz, 0, od));
+    return desc;
+  }
+  
+  private JSONArray getClassProperties(Class<?> clazz, int level, OperatorDiscoverer od) throws IntrospectionException
+  {
+    JSONArray arr = new JSONArray();
+    TypeDiscoverer td = new TypeDiscoverer();
+    try {
+      for (PropertyDescriptor pd : Introspector.getBeanInfo(clazz).getPropertyDescriptors()) {
+        Method readMethod = pd.getReadMethod();
+        if (readMethod != null) {
+          if (readMethod.getDeclaringClass() == java.lang.Enum.class) {
+            // skip getDeclaringClass
+            continue;
+          } else if ("class".equals(pd.getName())) {
+            // skip getClass
+            continue;
+          }
+        } else {
+          // yields com.datatorrent.api.Context on JDK6 and com.datatorrent.api.Context.OperatorContext with JDK7
+          if ("up".equals(pd.getName()) && com.datatorrent.api.Context.class.isAssignableFrom(pd.getPropertyType())) {
+            continue;
+          }
+        }
+        //LOG.info("name: " + pd.getName() + " type: " + pd.getPropertyType());
 
+          Class<?> propertyType = pd.getPropertyType();
+          if (propertyType != null) {
+            JSONObject propertyObj = new JSONObject();
+            propertyObj.put("name", pd.getName());
+            propertyObj.put("canGet", readMethod != null);
+            propertyObj.put("canSet", pd.getWriteMethod() != null);
+            if (readMethod != null) {
+              for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
+                OperatorClassInfo oci = od.getClassInfo().get(c.getName());
+                if (oci != null) {
+                  String getMethodDesc = oci.getMethods.get(readMethod.getName());
+                  if (getMethodDesc != null) {
+                    propertyObj.put("description", oci.getMethods.get(readMethod.getName()));
+                    break;
+                  }
+                }
+              }
+              // type can be a type symbol or parameterized type
+              td.setTypeArguments(clazz, readMethod.getGenericReturnType(), propertyObj);
+            } else {
+              if (pd.getWriteMethod() != null) {
+                td.setTypeArguments(clazz, pd.getWriteMethod().getGenericParameterTypes()[0], propertyObj);
+              }
+            }
+            //if (!propertyType.isPrimitive() && !propertyType.isEnum() && !propertyType.isArray() && !propertyType.getName().startsWith("java.lang") && level < MAX_PROPERTY_LEVELS) {
+            //  propertyObj.put("properties", getClassProperties(propertyType, level + 1));
+            //}
+            arr.put(propertyObj);
+          }
+      }
+    }
+    catch (JSONException ex) {
+      throw new RuntimeException(ex);
+    }
+    return arr;
+  }
   @Test
   public void bruteForceTest() throws Exception
   {
@@ -189,7 +277,7 @@ public class OperatorDiscoveryTest
     OperatorDiscoverer operatorDiscoverer = new OperatorDiscoverer(classFilePath);
     operatorDiscoverer.buildTypeGraph();
 
-    JSONObject oper = operatorDiscoverer.describeOperator(SubSubClassGeneric.class);
+    JSONObject oper = operatorDiscoverer.describeOperator(SubSubClassGeneric.class.getName());
     String debug = "\n(ASM)type info for " + TestOperator.class + ":\n" + oper.toString(2) + "\n";
 
     JSONArray props = oper.getJSONArray("properties");
@@ -329,13 +417,13 @@ public class OperatorDiscoveryTest
     Assert.assertEquals(debug + "type " + multiDimensionPrimitiveArray, int[][].class.getName(), multiDimensionPrimitiveArray.get("type"));
 
 
-    JSONObject enumDesc = od.describeClass(Color.class);
+    JSONObject enumDesc = describeClass(Color.class, od);
     debug = "\nJson for Color enum:\n" + enumDesc.toString(2) + "\n";
     JSONArray enumNames = enumDesc.getJSONArray("enum");
     Assert.assertNotNull(debug + "enumNames are not null", enumNames);
     Assert.assertEquals(debug + "First element of color", Color.BLUE.name(), enumNames.get(0));
 
-    JSONObject desc = od.describeClass(ExtendedOperator.class);
+    JSONObject desc = describeClass(ExtendedOperator.class, od);
     debug = "\ntype info for " + ExtendedOperator.class + ":\n" + desc.toString(2) + "\n";
     props = desc.getJSONArray("properties");
     genericArray = getJSONProperty(props, "genericArray");
@@ -358,11 +446,11 @@ public class OperatorDiscoveryTest
 
     // describeClassByASM now populates portTypes too, so checking only properties part
     ObjectMapper om = new ObjectMapper();
-    desc = od.describeClass(Structured.class);
+    desc = describeClass(Structured.class, od);
     asmDesc = od.describeClassByASM(Structured.class.getName());
     Assert.assertEquals("\ntype info for " + Structured.class + ":\n",  om.readTree(desc.get("properties").toString()), om.readTree(asmDesc.get("properties").toString()));
 
-    desc = od.describeClass(Color.class);
+    desc = describeClass(Color.class, od);
     asmDesc = od.describeClassByASM(Color.class.getName());
     Assert.assertEquals("\ntype info for " + Color.class + ":\n", om.readTree(desc.get("properties").toString()), om.readTree(asmDesc.get("properties").toString()));
 
@@ -947,12 +1035,12 @@ public class OperatorDiscoveryTest
     }
   }
 
-  @Test
+  /*@Test
   public void testArraySerialization() throws Exception
   {
     OperatorDiscoverer od = new OperatorDiscoverer();
     Assert.assertNotNull(od.getOperatorClass(BaseOperator.class.getName()));
-    JSONObject desc = od.describeClass(ArraysHolder.class);
+    JSONObject desc = describeClass(ArraysHolder.class, od);
     String debugInfo = "\ntype info for " + ArraysHolder.class + ":\n" + desc.toString(2) + "\n";
 
     JSONArray props = desc.getJSONArray("properties");
@@ -971,7 +1059,7 @@ public class OperatorDiscoveryTest
     Assert.assertNotNull(clone.intArray);
     Assert.assertArrayEquals(ah.intArray, clone.intArray);
 
-  }
+  }*/
   
   @Test
   public void testLogicalPlanConfiguration() throws Exception
