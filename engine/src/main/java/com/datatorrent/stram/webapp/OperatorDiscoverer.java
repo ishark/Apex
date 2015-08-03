@@ -619,12 +619,19 @@ public class OperatorDiscoverer
             return;
           }
           
-          TypeGraphVertex portTypeVertex  = typeGraph.getTypeGraphVertex(type);
-          ArrayList<String> parents = new ArrayList<String>();
-          for(TypeGraphVertex tgv: portTypeVertex.getAncestors()) {
-            parents.add(tgv.getClassNode().getName());
+          List<TypeGraphVertex> portTypes = new LinkedList<TypeGraphVertex>();
+          portTypes.add(typeGraph.getTypeGraphVertex(type));
+          
+
+          while (!portTypes.isEmpty()) {
+            TypeGraphVertex portTypeVertex  = portTypes.get(0);
+            ArrayList<String> parents = new ArrayList<String>();
+            for (TypeGraphVertex tgv : portTypeVertex.getAncestors()) {
+              portTypes.add(tgv);
+              parents.add(tgv.getClassNode().getName().replace('/', '.'));
+            }
+            portClassHier.put(type, parents);
           }
-          portClassHier.put(type, parents);
           
 //          // load the port type class
 //          Class<?> portClazz = classLoader.loadClass(type.replaceAll("\\bclass ", "").replaceAll("\\binterface ", ""));
