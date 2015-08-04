@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.datatorrent.api.Context.OperatorContext;
+import com.datatorrent.api.Context.PortContext;
 import com.datatorrent.api.DAG.OperatorMeta;
 import com.datatorrent.api.DAG.StreamMeta;
 import com.datatorrent.api.DefaultInputPort;
@@ -566,11 +567,6 @@ public class StreamPersistanceTests {
       public void process(Object tuple) {
         output.emit(tuple);
       }
-
-      @Override
-      public StreamCodec<Object> getStreamCodec() {
-        return new TestPartitionCodec();
-      }
     };
 
     public final transient DefaultOutputPort<Object> output = new DefaultOutputPort<Object>();
@@ -616,6 +612,7 @@ public class StreamPersistanceTests {
     final TestRecieverOperator console = dag.addOperator("console", new TestRecieverOperator());
     final TestPersistanceOperator console1 = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
+    dag.setInputPortAttribute(passThru.input, PortContext.STREAM_CODEC, new TestPartitionCodec());
     s.persist(console1, console1.inport);
     dag.addStream("Stream2", passThru.output, console.inport);
 

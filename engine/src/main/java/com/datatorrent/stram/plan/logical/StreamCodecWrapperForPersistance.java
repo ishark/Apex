@@ -6,9 +6,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Set;
 
-import com.datatorrent.api.Operator.InputPort;
 import com.datatorrent.api.Partitioner.PartitionKeys;
 import com.datatorrent.api.StreamCodec;
 import com.datatorrent.common.codec.JsonStreamCodec;
@@ -17,17 +15,17 @@ import com.datatorrent.stram.plan.logical.LogicalPlan.InputPortMeta;
 
 public class StreamCodecWrapperForPersistance<T> implements StreamCodec<T>, Serializable {
 
-  private Set<StreamCodec<Object>> codecsToMerge;
   private StreamCodec<Object> specifiedStreamCodec;
-  public Map<InputPortMeta, Collection<PartitionKeys>> codecsToMergeWithPartitions;
+  public Map<InputPortMeta, Collection<PartitionKeys>> inputPortToPartitionMap;
+  public Map<InputPortMeta, StreamCodec<Object>> codecsToMerge;
   public ArrayList<PartitionKeys> persistOperatorPartitionKeys;
   private Map<PartitionKeys, Integer> invalidPartionNumbersPerPartition;
   private boolean operatorPartitioned;
 
-  public StreamCodecWrapperForPersistance(Set<StreamCodec<Object>> inputStreamCodecs, StreamCodec<Object> specifiedStreamCodec) {
+  public StreamCodecWrapperForPersistance(Map<InputPortMeta, StreamCodec<Object>> inputStreamCodecs, StreamCodec<Object> specifiedStreamCodec) {
     this.codecsToMerge = inputStreamCodecs;
     this.setSpecifiedStreamCodec(specifiedStreamCodec);
-    codecsToMergeWithPartitions = new HashMap<InputPortMeta, Collection<PartitionKeys>>();
+    inputPortToPartitionMap = new HashMap<InputPortMeta, Collection<PartitionKeys>>();
     invalidPartionNumbersPerPartition = new HashMap<PartitionKeys, Integer>();
   }
 
@@ -44,9 +42,8 @@ public class StreamCodecWrapperForPersistance<T> implements StreamCodec<T>, Seri
   @Override
   public int getPartition(T o) {
     int partition = isOperatorPartitioned() ? getSpecifiedStreamCodec().getPartition(o) : persistOperatorPartitionKeys.get(0).partitions.iterator().next();
-    for (Entry<InputPortMeta, Collection<PartitionKeys>> entry : codecsToMergeWithPartitions.entrySet()) {
-      InputPort<?> sinkPort = entry.getKey().getPortObject();
-      StreamCodec<Object> codec = (StreamCodec<Object>) sinkPort.getStreamCodec();
+    for (Entry<InputPortMeta, Collection<PartitionKeys>> entry : inputPortToPartitionMap.entrySet()) {
+      StreamCodec<Object> codec = codecsToMerge.get(entry.getKey());
       Collection<PartitionKeys> partitionKeysList = entry.getValue();
 
       for (PartitionKeys keys : partitionKeysList) {
@@ -64,17 +61,9 @@ public class StreamCodecWrapperForPersistance<T> implements StreamCodec<T>, Seri
     return invalidPartionNumbersPerPartition.get(persistOperatorPartitionKeys.get(partition - 1));
   }
 
-  public Set<StreamCodec<Object>> getCodecsToMerge() {
-    return codecsToMerge;
-  }
-
-  public void setCodecsToMerge(Set<StreamCodec<Object>> codecsToMerge) {
-    this.codecsToMerge = codecsToMerge;
-  }
-
   public StreamCodec<Object> getSpecifiedStreamCodec() {
     if (specifiedStreamCodec == null) {
-      //TODO: Check default stream codec to use
+      // TODO: Check default stream codec to use
       specifiedStreamCodec = new JsonStreamCodec<Object>();
     }
     return specifiedStreamCodec;

@@ -641,9 +641,9 @@ public class LogicalPlan implements Serializable, DAG
       // directly be added
       String loggerOperatorName = getPersistOperatorName(sinkToPersist);
       addOperator(loggerOperatorName, persistOperator);
-      addStreamCodec(sinkToPersist, port);
       addSink(port);
       InputPortMeta sinkPortMeta = assertGetPortMeta(sinkToPersist);
+      addStreamCodec(sinkPortMeta, port);
       updateSinkSpecificLoggerMap(sinkPortMeta, loggerOperatorName, port);
       return this;
     }
@@ -659,18 +659,19 @@ public class LogicalPlan implements Serializable, DAG
       }
 
       InputPort<?> port = loggerOpMeta.getPortMapping().inPortMap.keySet().iterator().next();
-      addStreamCodec(sinkToPersist, port);
       addSink(port);
       InputPortMeta sinkPortMeta = assertGetPortMeta(sinkToPersist);
+      addStreamCodec(sinkPortMeta, port);
       updateSinkSpecificLoggerMap(sinkPortMeta, loggerOperatorName, port);
       return this;
     }
 
-    private void addStreamCodec(InputPort<?> sinkToPersist, InputPort<?> port) {
-      if(sinkToPersist.getStreamCodec() != null) {
-        Set<StreamCodec<Object>> codecs = new HashSet<StreamCodec<Object>>();
-        codecs.add((StreamCodec<Object>)sinkToPersist.getStreamCodec());
-        StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(codecs, (StreamCodec<Object>)port.getStreamCodec());
+    private void addStreamCodec(InputPortMeta sinkToPersistPortMeta, InputPort<?> port) {
+      StreamCodec<Object> inputStreamCodec = sinkToPersistPortMeta.getValue(PortContext.STREAM_CODEC) != null ? (StreamCodec<Object>) sinkToPersistPortMeta.getValue(PortContext.STREAM_CODEC) : (StreamCodec<Object>) sinkToPersistPortMeta.getPortObject().getStreamCodec();
+      if (inputStreamCodec != null) {
+        Map<InputPortMeta, StreamCodec<Object>> codecs = new HashMap<InputPortMeta, StreamCodec<Object>>();
+        codecs.put(sinkToPersistPortMeta, inputStreamCodec);
+        StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(codecs, (StreamCodec<Object>) port.getStreamCodec());
         setInputPortAttribute(port, PortContext.STREAM_CODEC, codec);
       }
     }

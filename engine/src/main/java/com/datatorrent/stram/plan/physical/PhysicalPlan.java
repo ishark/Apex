@@ -433,7 +433,7 @@ public class PhysicalPlan implements Serializable
       partitionKeysList.add(keys);
     }
 
-    persistCodec.codecsToMergeWithPartitions.put(sinkPortMeta, partitionKeysList);
+    persistCodec.inputPortToPartitionMap.put(sinkPortMeta, partitionKeysList);
   }
 
   /*
@@ -480,21 +480,22 @@ public class PhysicalPlan implements Serializable
       for (OperatorMeta n : dag.getAllOperators()) {
         for (StreamMeta s : n.getOutputStreams().values()) {
           if (s.getPersistOperator() != null) {
-            Set<StreamCodec<Object>> inputStreamCodecs = new HashSet<StreamCodec<Object>>();
+            Map<InputPortMeta, StreamCodec<Object>> inputStreamCodecs = new HashMap<InputPortMeta, StreamCodec<Object>>();
             // Logging is enabled for the stream
             for (InputPortMeta portMeta : s.getSinksToPersist()) {
               InputPort<?> port = portMeta.getPortObject();
-
-              if (port.getStreamCodec() != null) {
+              StreamCodec<?> inputStreamCodec = (portMeta.getValue(PortContext.STREAM_CODEC) != null) ? portMeta.getValue(PortContext.STREAM_CODEC) : port.getStreamCodec();
+              if (inputStreamCodec != null) {
                 boolean alreadyAdded = false;
-                for (StreamCodec<?> codec : inputStreamCodecs) {
-                  if (port.getStreamCodec().equals(codec)) {
+
+                for (StreamCodec<?> codec : inputStreamCodecs.values()) {
+                  if (inputStreamCodec.equals(codec)) {
                     alreadyAdded = true;
                     break;
                   }
                 }
                 if (!alreadyAdded) {
-                  inputStreamCodecs.add((StreamCodec<Object>) port.getStreamCodec());
+                  inputStreamCodecs.put(portMeta, (StreamCodec<Object>) inputStreamCodec);
                 }
               }
             }
