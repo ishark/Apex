@@ -617,7 +617,7 @@ public class OperatorDiscoverer
 
         try {
           TypeGraphVertex portTypeVertex = typeGraph.getTypeGraphVertex(type);
-          
+
           while (portTypeVertex != null) {
             ClassSignatureVisitor csv = portTypeVertex.getClassNode().getCsv();
             ArrayList<String> parents = new ArrayList<String>();
@@ -626,7 +626,7 @@ public class OperatorDiscoverer
             for (Type t : csv.getInterfaces()) {
               if (!portClassHier.has(t.getByteString())) {
                 // add the interface to portClassHier
-                portClassHier.put(t.getByteString(), new ArrayList<String>());
+                portClassHier.put(t.toString(), new ArrayList<String>());
               }
               parents.add(t.toString());
             }
@@ -635,8 +635,10 @@ public class OperatorDiscoverer
               break;
             }
 
-            type = csv.getSuperClass().getByteString();
-            if(portClassHier.has(type)) {
+            portClassHier.put(portTypeVertex.typeName, parents);
+            
+            type = csv.getSuperClass().toString();
+            if (portClassHier.has(type)) {
               break;
             }
             portTypeVertex = typeGraph.getTypeGraphVertex(type);
