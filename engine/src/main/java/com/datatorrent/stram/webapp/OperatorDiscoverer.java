@@ -20,8 +20,10 @@ import com.datatorrent.netlet.util.DTThrowable;
 import com.datatorrent.stram.util.ObjectMapperFactory;
 import com.datatorrent.stram.webapp.TypeDiscoverer.UI_TYPE;
 import com.datatorrent.stram.webapp.TypeGraph.TypeGraphVertex;
+import com.datatorrent.stram.webapp.asm.ClassSignatureVisitor;
 import com.datatorrent.stram.webapp.asm.CompactAnnotationNode;
 import com.datatorrent.stram.webapp.asm.CompactFieldNode;
+import com.datatorrent.stram.webapp.asm.Type;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -614,25 +616,47 @@ public class OperatorDiscoverer
         }
 
         try {
-          if (portClassHier.has(type)) {
-            // already present in portClassHier, so we can stop
-            return;
-          }
+          TypeGraphVertex portTypeVertex = typeGraph.getTypeGraphVertex(type);
           
-          List<TypeGraphVertex> portTypes = new LinkedList<TypeGraphVertex>();
-          portTypes.add(typeGraph.getTypeGraphVertex(type));
-          
-
-          while (!portTypes.isEmpty()) {
-            TypeGraphVertex portTypeVertex  = portTypes.get(0);
+          while (portTypeVertex != null) {
+            ClassSignatureVisitor csv = portTypeVertex.getClassNode().getCsv();
             ArrayList<String> parents = new ArrayList<String>();
-            for (TypeGraphVertex tgv : portTypeVertex.getAncestors()) {
-              portTypes.add(tgv);
-              parents.add(tgv.getClassNode().getName().replace('/', '.'));
+
+            parents.add(csv.getSuperClass().toString());
+            for (Type t : csv.getInterfaces()) {
+              if (!portClassHier.has(t.getByteString())) {
+                // add the interface to portClassHier
+                portClassHier.put(t.getByteString(), new ArrayList<String>());
+              }
+              parents.add(t.toString());
             }
-            portClassHier.put(type, parents);
+
+            if (csv.getSuperClass() == null) {
+              break;
+            }
+
+            type = csv.getSuperClass().getByteString();
+            if(portClassHier.has(type)) {
+              break;
+            }
+            portTypeVertex = typeGraph.getTypeGraphVertex(type);
           }
-          
+//          List<TypeGraphVertex> portTypes = new LinkedList<TypeGraphVertex>();
+//          portTypes.add(typeGraph.getTypeGraphVertex(type));
+//          
+//
+//          while (!portTypes.isEmpty()) {
+//            TypeGraphVertex portTypeVertex  = portTypes.get(0);
+//            portTypes.remove(0);
+//            ArrayList<String> parents = new ArrayList<String>();
+//            ClassSignatureVisitor csv = portTypeVertex.getClassNode().getCsv();
+////            if(portTypeVertex.typeName)
+//            for (TypeGraphVertex tgv : portTypeVertex.getAncestors()) {
+//              portTypes.add(tgv);
+//            }
+//            portClassHier.put(type, parents);
+//          }
+//          
 //          // load the port type class
 //          Class<?> portClazz = classLoader.loadClass(type.replaceAll("\\bclass ", "").replaceAll("\\binterface ", ""));
 //
