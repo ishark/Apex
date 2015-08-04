@@ -57,7 +57,7 @@ public class StreamCodecWrapperForPersistance<T> implements StreamCodec<T>, Seri
 
     // Return some invalid partition value, so that the event wont be sent to
     // any partition
-
+    partition =  partition >  persistOperatorPartitionKeys.size() ? persistOperatorPartitionKeys.size(): partition;
     return invalidPartionNumbersPerPartition.get(persistOperatorPartitionKeys.get(partition - 1));
   }
 

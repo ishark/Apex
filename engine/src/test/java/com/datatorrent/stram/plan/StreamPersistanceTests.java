@@ -59,6 +59,33 @@ public class StreamPersistanceTests {
         results.add(t);
       }
     };
+
+  }
+
+  public static class PartitionedTestPersistanceOperator extends TestPersistanceOperator implements Partitioner<PartitionedTestPersistanceOperator> {
+    @Override
+    public Collection definePartitions(Collection partitions, PartitioningContext context) {
+      Collection<Partition> newPartitions = new ArrayList<Partition>();
+
+      int partitionMask = 0x03;
+
+      // No partitioning done so far..
+      // Single partition again, but with only even numbers ok?
+      // First partition
+      PartitionedTestPersistanceOperator newInstance = new PartitionedTestPersistanceOperator();
+      Partition partition = new DefaultPartition<PartitionedTestPersistanceOperator>(newInstance);
+      PartitionKeys value = new PartitionKeys(partitionMask, Sets.newHashSet(0));
+      partition.getPartitionKeys().put(inport, value);
+      newPartitions.add(partition);
+
+      return newPartitions;
+    }
+
+    @Override
+    public void partitioned(Map partitions) {
+      // TODO Auto-generated method stub
+
+    }
   }
 
   public class TestOperatorWithOutputPorts extends BaseOperator {
@@ -654,4 +681,55 @@ public class StreamPersistanceTests {
 
   }
 
+  @Test
+  public void testPartitionedPersistOperator() throws ClassNotFoundException, IOException {
+    LogicalPlan dag = new LogicalPlan();
+    AscendingNumbersOperator ascend = dag.addOperator("ascend", new AscendingNumbersOperator());
+    PartitionedTestOperatorWithFiltering passThru = dag.addOperator("partition", new PartitionedTestOperatorWithFiltering());
+    final TestRecieverOperator console = dag.addOperator("console", new TestRecieverOperator());
+    final PartitionedTestPersistanceOperator console1 = new PartitionedTestPersistanceOperator();
+    StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
+    dag.setInputPortAttribute(passThru.input, PortContext.STREAM_CODEC, new TestPartitionCodec());
+    s.persist(console1, console1.inport);
+    dag.setInputPortAttribute(console1.inport, PortContext.STREAM_CODEC, new TestPartitionCodec());
+    dag.addStream("Stream2", passThru.output, console.inport);
+
+    final StramLocalCluster lc = new StramLocalCluster(dag);
+
+    new Thread("LocalClusterController") {
+      @Override
+      public void run() {
+        long startTms = System.currentTimeMillis();
+        long timeout = 100000L;
+        try {
+          while (System.currentTimeMillis() - startTms < timeout) {
+            if (console1.results.size() < 6) {
+              Thread.sleep(10);
+            } else {
+              break;
+            }
+          }
+        } catch (Exception ex) {
+          DTThrowable.rethrow(ex);
+        } finally {
+          lc.shutdown();
+        }
+      }
+
+    }.start();
+
+    lc.run();
+
+    // Values as per persist operator's partition keys should be picked up
+    String[] expectedResult = { "0", "4", "8", "12", "16", "20" };
+
+    for (int i = 0; i < expectedResult.length; i++) {
+      LOG.debug(console1.results.get(i) + " " + expectedResult[i]);
+      assertEquals("Mismatch observed for tuple ", expectedResult[i], console1.results.get(i));
+    }
+
+    console1.results.clear();
+    console.results.clear();
+
+  }
 }

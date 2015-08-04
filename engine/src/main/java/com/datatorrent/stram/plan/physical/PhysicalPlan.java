@@ -454,6 +454,7 @@ public class PhysicalPlan implements Serializable
 
       newKeys = new PartitionKeys(keys.mask | newMask, keys.partitions);
       persistCodec.setInvalidPartionNumber(newKeys, newMask);
+      persistCodec.setOperatorPartitioned(true);
       p.getPartitionKeys().put(portMeta.getPortObject(), newKeys);
     } else {
       newMask = 1; // 0x1 : 1 is valid partition and 0 is an invalid partition number
@@ -509,7 +510,7 @@ public class PhysicalPlan implements Serializable
               // Create Wrapper codec for Stream persistence using all unique
               // stream codecs
               // Logger should write merged or union of all input stream codecs
-              StreamCodec<Object> specifiedCodecForLogger = (StreamCodec<Object>) s.getPersistOperatorInputPort().getPortObject().getStreamCodec();
+              StreamCodec<Object> specifiedCodecForLogger = (s.getPersistOperatorInputPort().getValue(PortContext.STREAM_CODEC) != null) ? (StreamCodec<Object>)s.getPersistOperatorInputPort().getValue(PortContext.STREAM_CODEC) : (StreamCodec<Object>)s.getPersistOperatorInputPort().getPortObject().getStreamCodec();
               StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(inputStreamCodecs, specifiedCodecForLogger);
               streamMetaToCodecMap.put(s, codec);
             }

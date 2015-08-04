@@ -571,7 +571,7 @@ public class LogicalPlan implements Serializable, DAG
     }
 
     private OperatorMeta createPersistOperatorMeta(Operator persistOperator) {
-      persistOperatorName = getPersistOperatorName();
+      persistOperatorName = getPersistOperatorName((BaseOperator)persistOperator);
       addOperator(persistOperatorName, persistOperator);
       OperatorMeta loggerOpMeta = getOperatorMeta(persistOperatorName);
       setPersistOperator(loggerOpMeta);
@@ -625,7 +625,10 @@ public class LogicalPlan implements Serializable, DAG
       return enableSinksForPersisting;
     }
 
-    private String getPersistOperatorName() {
+    private String getPersistOperatorName(BaseOperator operator) {
+      if(operator != null && operator.getName() != null) {
+        return operator.getName();
+      }
       return id + "_persister";
     }
 
@@ -671,7 +674,9 @@ public class LogicalPlan implements Serializable, DAG
       if (inputStreamCodec != null) {
         Map<InputPortMeta, StreamCodec<Object>> codecs = new HashMap<InputPortMeta, StreamCodec<Object>>();
         codecs.put(sinkToPersistPortMeta, inputStreamCodec);
-        StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(codecs, (StreamCodec<Object>) port.getStreamCodec());
+        InputPortMeta persistOperatorPortMeta = assertGetPortMeta(port);
+        StreamCodec<Object> specifiedCodecForLogger = (persistOperatorPortMeta.getValue(PortContext.STREAM_CODEC) != null) ? (StreamCodec<Object>)persistOperatorPortMeta.getValue(PortContext.STREAM_CODEC) : (StreamCodec<Object>)port.getStreamCodec();
+        StreamCodecWrapperForPersistance<Object> codec = new StreamCodecWrapperForPersistance<Object>(codecs, specifiedCodecForLogger);
         setInputPortAttribute(port, PortContext.STREAM_CODEC, codec);
       }
     }
