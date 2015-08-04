@@ -40,7 +40,7 @@ public interface Type
       }
       return typeObj;
     }
-    
+
     @Override
     public String toString()
     {
@@ -53,6 +53,11 @@ public interface Type
       } else {
         return typeObj.getClassName();
       }
+    }
+
+    public String getClassName()
+    {
+      return typeObj.getClassName();
     }
 
     @Override
@@ -178,6 +183,5 @@ public interface Type
     
   }
   
-  String getByteString();
-
+  String getByteString();  
 }

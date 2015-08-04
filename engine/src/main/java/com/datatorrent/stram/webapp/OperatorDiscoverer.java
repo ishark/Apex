@@ -24,6 +24,7 @@ import com.datatorrent.stram.webapp.asm.ClassSignatureVisitor;
 import com.datatorrent.stram.webapp.asm.CompactAnnotationNode;
 import com.datatorrent.stram.webapp.asm.CompactFieldNode;
 import com.datatorrent.stram.webapp.asm.Type;
+import com.datatorrent.stram.webapp.asm.Type.TypeNode;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -637,11 +638,14 @@ public class OperatorDiscoverer
 
             portClassHier.put(portTypeVertex.typeName, parents);
             
-            type = csv.getSuperClass().toString();
-            if (portClassHier.has(type)) {
+            Type superType = csv.getSuperClass();
+            if (portClassHier.has(superType.toString())) {
               break;
             }
-            portTypeVertex = typeGraph.getTypeGraphVertex(type);
+            if(superType instanceof TypeNode) {
+              
+              portTypeVertex = typeGraph.getTypeGraphVertex(((TypeNode)superType).getClassName()); 
+            }
           }
 //          List<TypeGraphVertex> portTypes = new LinkedList<TypeGraphVertex>();
 //          portTypes.add(typeGraph.getTypeGraphVertex(type));
