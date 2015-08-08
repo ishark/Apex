@@ -27,6 +27,7 @@ import com.datatorrent.api.DefaultInputPort;
 import com.datatorrent.api.DefaultOutputPort;
 import com.datatorrent.api.DefaultPartition;
 import com.datatorrent.api.InputOperator;
+import com.datatorrent.api.Operator;
 import com.datatorrent.api.Partitioner;
 import com.datatorrent.api.StatsListener;
 import com.datatorrent.api.StreamCodec;
@@ -72,7 +73,7 @@ public class StreamPersistanceTests
     };
   }
 
-  public static class TestPersistanceOperator extends BaseOperator
+  public static class TestPersistanceOperator implements Operator
   {
     public static volatile List<Object> results = new ArrayList<Object>();
 
@@ -85,6 +86,26 @@ public class StreamPersistanceTests
         results.add(t);
       }
     };
+
+    @Override
+    public void setup(OperatorContext context)
+    {
+    }
+
+    @Override
+    public void teardown()
+    {
+    }
+
+    @Override
+    public void beginWindow(long windowId)
+    {
+    }
+
+    @Override
+    public void endWindow()
+    {
+    }
 
   }
 
@@ -178,7 +199,7 @@ public class StreamPersistanceTests
     GenericTestOperator x = dag.addOperator("x", new GenericTestOperator());
     TestRecieverOperator logger = new TestRecieverOperator();
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x.inport1);
-    stream.persist(logger, logger.inport);
+    stream.persistUsing("Stream1_persister",logger, logger.inport);
 
     // Check operator is added to dag
     OperatorMeta persistOperatorMeta = dag.getOperatorMeta("Stream1_persister");
@@ -201,9 +222,9 @@ public class StreamPersistanceTests
 
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x1.inport1, x2.inport1, x3.inport1);
 
-    stream.persist(logger, logger.inport);
-    stream.persist(x1.inport1, logger1, logger1.inport);
-    stream.persist(x2.inport1, logger2, logger2.inport);
+    stream.persistUsing("Stream1_persister", logger, logger.inport);
+    stream.persistUsing("Stream1_x1_persister", logger1, logger1.inport, x1.inport1);
+    stream.persistUsing("Stream1_x2_persister", logger2, logger2.inport, x2.inport1);
 
     // Check 3 persist operators are added to dag
     OperatorMeta persistOperatorMeta = dag.getOperatorMeta("Stream1_persister");
@@ -229,7 +250,7 @@ public class StreamPersistanceTests
 
     TestOperatorWithOutputPorts logger = new TestOperatorWithOutputPorts();
     try {
-      stream.persist(logger, logger.inputPort);
+      stream.persistUsing("logger", logger, logger.inputPort);
       Assert.fail("should throw Illegal argument exception: Logger has non optional output ports");
     } catch (IllegalArgumentException e) {
       LOG.debug(e.getMessage());
@@ -238,7 +259,7 @@ public class StreamPersistanceTests
     // Test already added operator passed as logger
     TestOperatorWithOutputPorts logger1 = new TestOperatorWithOutputPorts();
     try {
-      stream.persist(logger1, logger1.inputPort);
+      stream.persistUsing("Stream1_persister", logger1, logger1.inputPort);
       Assert.fail("should throw exception that Stream1_persister object was already added");
     } catch (IllegalArgumentException e) {
       LOG.debug(e.getMessage());
@@ -248,7 +269,7 @@ public class StreamPersistanceTests
     dag.removeOperator(dag.getOperatorMeta("Stream1_persister").getOperator());
     TestOperatorWithoutInputPorts logger2 = new TestOperatorWithoutInputPorts();
     try {
-      stream.persist(logger2);
+      stream.persistUsing("Stream1_persister", logger2);
       Assert.fail("should throw Illegal argument exception: Logger should have input ports");
     } catch (IllegalArgumentException e) {
       LOG.debug(e.getMessage());
@@ -258,7 +279,7 @@ public class StreamPersistanceTests
     dag.removeOperator(dag.getOperatorMeta("Stream1_persister").getOperator());
     TestOperatorWithMultipleNonOptionalInputPorts logger3 = new TestOperatorWithMultipleNonOptionalInputPorts();
     try {
-      stream.persist(logger3);
+      stream.persistUsing("Stream1_persister", logger3);
       Assert.fail("should throw Illegal argument exception: Logger should have at most 1 non-optional input port");
     } catch (IllegalArgumentException e) {
       LOG.debug(e.getMessage());
@@ -276,7 +297,7 @@ public class StreamPersistanceTests
     TestRecieverOperator logger1 = new TestRecieverOperator();
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x.inport1);
     try {
-      stream.persist(logger, logger1.inport);
+      stream.persistUsing("Stream1_persister", logger, logger1.inport);
       Assert.fail("should throw Illegal argument exception: Port passed does not belong to operator class");
     } catch (IllegalArgumentException e) {
     }
@@ -294,7 +315,7 @@ public class StreamPersistanceTests
     GenericTestOperator x = dag.addOperator("x", new GenericTestOperator());
     TestRecieverOperator logger = new TestRecieverOperator();
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x.inport1);
-    stream.persist(logger, logger.inport);
+    stream.persistUsing("Stream1_persister", logger, logger.inport);
 
     ((LogicalPlan.StreamMeta) stream).remove();
 
@@ -319,9 +340,9 @@ public class StreamPersistanceTests
 
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x1.inport1, x2.inport1, x3.inport1);
 
-    stream.persist(logger, logger.inport);
-    stream.persist(x1.inport1, logger1, logger1.inport);
-    stream.persist(x2.inport1, logger2, logger2.inport);
+    stream.persistUsing("Stream1_persister", logger, logger.inport);
+    stream.persistUsing("Stream1_x1_persister", logger1, logger1.inport, x1.inport1);
+    stream.persistUsing("Stream1_x2_persister", logger2, logger2.inport, x2.inport1);
 
     // Check 3 persist operators are added to dag
     OperatorMeta persistOperatorMeta = dag.getOperatorMeta("Stream1_persister");
@@ -360,7 +381,7 @@ public class StreamPersistanceTests
 
     StreamMeta stream = dag.addStream("Stream1", input1.outport, x1.inport1, x2.inport1, x3.inport1);
 
-    stream.persist(logger, logger.inport);
+    stream.persistUsing("Stream1_persister", logger, logger.inport);
 
     // Check stream persister is added to the dag
     Assert.assertNotNull("Stream persister operator should be present", dag.getOperatorMeta("Stream1_persister"));
@@ -384,7 +405,7 @@ public class StreamPersistanceTests
 
     // Use an instance of PersistOperator to persist stream
     TestPersistanceOperator logger = new TestPersistanceOperator();
-    stream.persist(logger, logger.inport);
+    stream.persistUsing("Stream1_persister", logger, logger.inport);
 
     runLocalClusterAndValidate(dag, x, logger);
   }
@@ -571,7 +592,7 @@ public class StreamPersistanceTests
     TestRecieverOperator console = dag.addOperator("console", new TestRecieverOperator());
     TestPersistanceOperator console1 = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
-    s.persist(console1, console1.inport);
+    s.persistUsing("Stream1_persister", console1, console1.inport);
     dag.addStream("Stream2", passThru.output, console.inport);
     runLocalClusterAndValidate(dag, console, console1);
   }
@@ -586,7 +607,7 @@ public class StreamPersistanceTests
 
     TestPersistanceOperator logger = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
-    s.persist(passThru.input, logger, logger.inport);
+    s.persistUsing("Stream1_persister", logger, logger.inport, passThru.input);
     dag.addStream("Stream2", passThru.output, console.inport);
     runLocalClusterAndValidate(dag, console, logger);
   }
@@ -601,7 +622,7 @@ public class StreamPersistanceTests
 
     TestPersistanceOperator logger = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input).setLocality(Locality.CONTAINER_LOCAL);
-    s.persist(passThru.input, logger, logger.inport);
+    s.persistUsing("persister", logger, logger.inport, passThru.input);
     dag.addStream("Stream2", passThru.output, console.inport);
     runLocalClusterAndValidate(dag, console, logger);
   }
@@ -619,7 +640,7 @@ public class StreamPersistanceTests
 
     TestPersistanceOperator logger = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru1.input, passThru2.input);
-    s.persist(logger, logger.inport);
+    s.persistUsing("persister", logger, logger.inport);
 
     dag.addStream("Stream2", passThru1.output, console.inport);
     dag.addStream("Stream3", passThru2.output, console1.inport);
@@ -749,7 +770,7 @@ public class StreamPersistanceTests
     final TestPersistanceOperator console1 = new TestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
     dag.setInputPortAttribute(passThru.input, PortContext.STREAM_CODEC, new TestPartitionCodec());
-    s.persist(console1, console1.inport);
+    s.persistUsing("persister", console1, console1.inport);
     dag.addStream("Stream2", passThru.output, console.inport);
 
     final StramLocalCluster lc = new StramLocalCluster(dag);
@@ -803,7 +824,7 @@ public class StreamPersistanceTests
     final PartitionedTestPersistanceOperator console1 = new PartitionedTestPersistanceOperator();
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, passThru.input);
     dag.setInputPortAttribute(passThru.input, PortContext.STREAM_CODEC, new TestPartitionCodec());
-    s.persist(console1, console1.inport);
+    s.persistUsing("persister", console1, console1.inport);
     dag.setInputPortAttribute(console1.inport, PortContext.STREAM_CODEC, new TestPartitionCodec());
     dag.addStream("Stream2", passThru.output, console.inport);
 
@@ -869,7 +890,7 @@ public class StreamPersistanceTests
 
     StreamMeta s = dag.addStream("Stream1", ascend.outputPort, console.inport);
     dag.setInputPortAttribute(console.inport, PortContext.STREAM_CODEC, new TestPartitionCodec());
-    s.persist(console1, console1.inport);
+    s.persistUsing("persister", console1, console1.inport);
 
     dag.setAttribute(LogicalPlan.CONTAINERS_MAX_COUNT, Integer.MAX_VALUE);
     StramTestSupport.MemoryStorageAgent msa = new StramTestSupport.MemoryStorageAgent();

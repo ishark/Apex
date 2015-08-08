@@ -68,12 +68,10 @@ public class PartitionAwareSink<T> implements Sink<T>
     }
   }
 
-  private boolean canPutPayloadToOutput(T payload)
+  protected boolean canPutPayloadToOutput(T payload)
   {
-    if (serde instanceof StreamCodecWrapperForPersistance) {
-      if (!((StreamCodecWrapperForPersistance) serde).shouldCaptureEvent(payload)) {
-        return false;
-      }
+    if(partitions == null) {
+      return true;
     }
     return partitions.contains(serde.getPartition(payload) & mask);
   }

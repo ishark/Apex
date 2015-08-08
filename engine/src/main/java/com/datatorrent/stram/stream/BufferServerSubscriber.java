@@ -170,6 +170,22 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
     return r;
   }
 
+  public SweepableReservoir acquireReservoirForPersistStream(String id, int capacity, StreamCodec<?> streamCodec)
+  {
+    BufferReservoir r = reservoirMap.get(id);
+    if (r == null) {
+      reservoirMap.put(id, r = new BufferReservoirForPersistStream(capacity, streamCodec));
+      BufferReservoir[] newReservoirs = new BufferReservoir[reservoirs.length + 1];
+      newReservoirs[reservoirs.length] = r;
+      for (int i = reservoirs.length; i-- > 0;) {
+        newReservoirs[i] = reservoirs[i];
+      }
+      reservoirs = newReservoirs;
+    }
+
+    return r;
+  }
+
   @Override
   public void put(Object tuple)
   {
@@ -213,6 +229,7 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
 
   class BufferReservoir extends CircularBuffer<Object> implements SweepableReservoir
   {
+    protected boolean skipObject;
     private Sink<Object> sink;
     int count;
 
@@ -273,7 +290,7 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
           Slice fm = polledFragments.pollUnsafe();
           com.datatorrent.bufferserver.packet.Tuple data = com.datatorrent.bufferserver.packet.Tuple.getTuple(fm.buffer, fm.offset, fm.length);
           Object o;
-          boolean skipObject=false;
+          skipObject=false;
           switch (data.getType()) {
             case NO_MESSAGE:
               freeFragments.offer(fm);
@@ -294,19 +311,7 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
               break;
 
             case PAYLOAD:
-              if (statefulSerde == null) {
-                o = serde.fromByteArray(data.getData());
-  
-                if (serde instanceof StreamCodecWrapperForPersistance) {
-                  StreamCodecWrapperForPersistance wrapperCodec = (StreamCodecWrapperForPersistance) serde;
-                  if (!wrapperCodec.shouldCaptureEvent(o)) {
-                    skipObject = true;
-                  }
-                }
-              } else {
-                dsp.data = data.getData();
-                o = statefulSerde.fromDataStatePair(dsp);
-              }
+              o = processPayload(data);
               break;
 
             case CHECKPOINT:
@@ -345,6 +350,18 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
       return null;
     }
 
+    protected Object processPayload(com.datatorrent.bufferserver.packet.Tuple data)
+    {
+      Object o;
+      if (statefulSerde == null) {
+        o = serde.fromByteArray(data.getData());
+      } else {
+        dsp.data = data.getData();
+        o = statefulSerde.fromDataStatePair(dsp);
+      }
+      return o;
+    }
+
     @Override
     public int getCount(boolean reset)
     {
@@ -358,6 +375,28 @@ public class BufferServerSubscriber extends Subscriber implements ByteCounterStr
       }
     }
 
+  }
+
+  public class BufferReservoirForPersistStream extends BufferReservoir
+  {
+    StreamCodecWrapperForPersistance wrapperStreamCodec;
+
+    BufferReservoirForPersistStream(int capacity, StreamCodec<?> streamCodec)
+    {
+      super(capacity);
+      wrapperStreamCodec = (StreamCodecWrapperForPersistance<Object>) streamCodec;
+    }
+
+    @Override
+    protected Object processPayload(com.datatorrent.bufferserver.packet.Tuple data)
+    {
+      Object o = wrapperStreamCodec.fromByteArray(data.getData());
+      if (!wrapperStreamCodec.shouldCaptureEvent(o)) {
+        skipObject = true;
+      }
+
+      return o;
+    }
   }
 
   private static final Logger logger = LoggerFactory.getLogger(BufferServerSubscriber.class);

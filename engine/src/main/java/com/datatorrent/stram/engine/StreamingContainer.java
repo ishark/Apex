@@ -1116,6 +1116,9 @@ public class StreamingContainer extends YarnContainerMain
             BufferServerSubscriber subscriber = fastPublisherSubscriber
               ? new FastSubscriber("tcp://".concat(nidi.bufferServerHost).concat(":").concat(String.valueOf(nidi.bufferServerPort)).concat("/").concat(connIdentifier), queueCapacity)
               : new BufferServerSubscriber("tcp://".concat(nidi.bufferServerHost).concat(":").concat(String.valueOf(nidi.bufferServerPort)).concat("/").concat(connIdentifier), queueCapacity);
+            if(streamCodec instanceof StreamCodecWrapperForPersistance) {
+              subscriber.acquireReservoirForPersistStream(sinkIdentifier, queueCapacity, streamCodec);
+            }
             SweepableReservoir reservoir = subscriber.acquireReservoir(sinkIdentifier, queueCapacity);
             if (checkpoint.windowId >= 0) {
               node.connectInputPort(nidi.portName, new WindowIdActivatedReservoir(sinkIdentifier, reservoir, checkpoint.windowId));
@@ -1177,7 +1180,11 @@ public class StreamingContainer extends YarnContainerMain
             }
 
             /* here everything should be multisink capable */
-            if (nidi.partitionKeys == null || nidi.partitionKeys.isEmpty() || !(streamCodec instanceof StreamCodecWrapperForPersistance)) {
+            if(streamCodec instanceof StreamCodecWrapperForPersistance) {
+              PartitionAwareSinkForPersistence<Object> pas = new PartitionAwareSinkForPersistence(streamCodec, nidi.partitionKeys, nidi.partitionMask, stream);
+              ((Stream.MultiSinkCapableStream) pair.component).setSink(sinkIdentifier, pas);
+            }
+            else if (nidi.partitionKeys == null || nidi.partitionKeys.isEmpty()) {
               ((Stream.MultiSinkCapableStream) pair.component).setSink(sinkIdentifier, stream);
             }
             else {
