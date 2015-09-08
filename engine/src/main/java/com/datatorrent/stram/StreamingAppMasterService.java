@@ -30,7 +30,6 @@ import com.google.common.collect.Maps;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.hadoop.conf.Configuration;
@@ -65,7 +64,7 @@ import com.datatorrent.api.AutoMetric;
 import com.datatorrent.api.Context.DAGContext;
 import com.datatorrent.api.DAG;
 import com.datatorrent.api.StringCodec;
-
+import com.datatorrent.stram.StreamingContainerAgent.ContainerStartRequest;
 import com.datatorrent.stram.StreamingContainerManager.ContainerResource;
 import com.datatorrent.stram.api.AppDataSource;
 import com.datatorrent.stram.api.BaseContext;
@@ -736,8 +735,10 @@ public class StreamingAppMasterService extends CompositeService
       // Setup request to be sent to RM to allocate containers
       List<ContainerRequest> containerRequests = new ArrayList<ContainerRequest>();
       List<ContainerRequest> removedContainerRequests = new ArrayList<ContainerRequest>();
+      Map<String, List<ContainerStartRequest>> operatorNameToContainerRequestMapping = new HashMap<String, List<ContainerStartRequest>>();
 
       // request containers for pending deploy requests
+      // First add all the containers which do not have anti-affinity set:
       if (!dnmgr.containerStartRequests.isEmpty()) {
         StreamingContainerAgent.ContainerStartRequest csr;
         while ((csr = dnmgr.containerStartRequests.poll()) != null) {
@@ -745,168 +746,197 @@ public class StreamingAppMasterService extends CompositeService
             LOG.warn("Container memory {}m above max threshold of cluster. Using max value {}m.", csr.container.getRequiredMemoryMB(), maxMem);
             csr.container.setRequiredMemoryMB(maxMem);
           }
-          if(csr.container.getRequiredMemoryMB() < minMem){
+          if (csr.container.getRequiredMemoryMB() < minMem) {
             csr.container.setRequiredMemoryMB(minMem);
           }
           if (csr.container.getRequiredVCores() > maxVcores) {
             LOG.warn("Container vcores {} above max threshold of cluster. Using max value {}.", csr.container.getRequiredVCores(), maxVcores);
             csr.container.setRequiredVCores(maxVcores);
           }
-          if(csr.container.getRequiredVCores() < minVcores){
+          if (csr.container.getRequiredVCores() < minVcores) {
             csr.container.setRequiredVCores(minVcores);
           }
+
+          for (PTOperator operator : csr.container.getOperators()) {
+            if (!operatorNameToContainerRequestMapping.containsKey(operator.getName())) {
+              operatorNameToContainerRequestMapping.put(operator.getName(), new ArrayList<ContainerStartRequest>());
+            }
+            operatorNameToContainerRequestMapping.get(operator.getName()).add(csr);
+          }
           csr.container.setResourceRequestPriority(nextRequestPriority++);
+          requestedResources.put(csr, null);
+        }
+      }
+
+      List<Set<ContainerStartRequest>> containerRequestsSet =  partitionRequestsWithAntiAffinity(operatorNameToContainerRequestMapping, requestedResources.keySet());
+      sortRequestsSetBySize(containerRequestsSet);
+      List<String> blacklistAdditions = new ArrayList<String>();
+      for (Set<ContainerStartRequest> requestsSet : containerRequestsSet) {
+        blacklistAdditions.clear();
+        containerRequests.clear();
+        for (ContainerStartRequest csr : requestsSet) {
           ContainerRequest cr = resourceRequestor.createContainerRequest(csr, true);
           MutablePair<Integer, ContainerRequest> pair = new MutablePair<Integer, ContainerRequest>(loopCounter, cr);
           requestedResources.put(csr, pair);
           containerRequests.add(cr);
         }
-      }
 
-      if (!requestedResources.isEmpty()) {
-        //resourceRequestor.clearNodeMapping();
-        for (Map.Entry<StreamingContainerAgent.ContainerStartRequest, MutablePair<Integer, ContainerRequest>> entry : requestedResources.entrySet()) {
-          if ((loopCounter - entry.getValue().getKey()) > NUMBER_MISSED_HEARTBEATS) {
-            StreamingContainerAgent.ContainerStartRequest csr = entry.getKey();
-            removedContainerRequests.add(entry.getValue().getRight());
-            ContainerRequest cr = resourceRequestor.createContainerRequest(csr, false);
-            entry.getValue().setLeft(loopCounter);
-            entry.getValue().setRight(cr);
-            containerRequests.add(cr);
+        if (!requestedResources.isEmpty()) {
+          // resourceRequestor.clearNodeMapping();
+          for (Map.Entry<StreamingContainerAgent.ContainerStartRequest, MutablePair<Integer, ContainerRequest>> entry : requestedResources.entrySet()) {
+            if ((loopCounter - entry.getValue().getKey()) > NUMBER_MISSED_HEARTBEATS) {
+              StreamingContainerAgent.ContainerStartRequest csr = entry.getKey();
+              removedContainerRequests.add(entry.getValue().getRight());
+              ContainerRequest cr = resourceRequestor.createContainerRequest(csr, false);
+              entry.getValue().setLeft(loopCounter);
+              entry.getValue().setRight(cr);
+              containerRequests.add(cr);
+            }
           }
         }
-      }
 
-      numTotalContainers += containerRequests.size();
-      numRequestedContainers += containerRequests.size();
-      AllocateResponse amResp = sendContainerAskToRM(containerRequests, removedContainerRequests, releasedContainers);
-      if (amResp.getAMCommand() != null) {
-        LOG.info(" statement executed:{}", amResp.getAMCommand());
-        switch (amResp.getAMCommand()) {
+        // Add containers which prohave anti-affinity set:
+        numTotalContainers += containerRequests.size();
+        numRequestedContainers += containerRequests.size();
+        amRmClient.updateBlacklist(blacklistAdditions, null);
+        AllocateResponse amResp = sendContainerAskToRM(containerRequests, removedContainerRequests, releasedContainers);
+        if (amResp.getAMCommand() != null) {
+          LOG.info(" statement executed:{}", amResp.getAMCommand());
+          switch (amResp.getAMCommand()) {
           case AM_RESYNC:
           case AM_SHUTDOWN:
             throw new YarnRuntimeException("Received the " + amResp.getAMCommand() + " command from RM");
           default:
             throw new YarnRuntimeException("Received the " + amResp.getAMCommand() + " command from RM");
 
+          }
         }
-      }
-      releasedContainers.clear();
+        releasedContainers.clear();
 
-      // Retrieve list of allocated containers from the response
-      List<Container> newAllocatedContainers = amResp.getAllocatedContainers();
-      // LOG.info("Got response from RM for container ask, allocatedCnt=" + newAllocatedContainers.size());
-      numRequestedContainers -= newAllocatedContainers.size();
-      long timestamp = System.currentTimeMillis();
-      for (Container allocatedContainer : newAllocatedContainers) {
+        // Retrieve list of allocated containers from the response
+        List<Container> newAllocatedContainers = amResp.getAllocatedContainers();
+        // LOG.info("Got response from RM for container ask, allocatedCnt=" +
+        // newAllocatedContainers.size());
+        numRequestedContainers -= newAllocatedContainers.size();
+        long timestamp = System.currentTimeMillis();
+        for (Container allocatedContainer : newAllocatedContainers) {
 
-        LOG.info("Got new container." + ", containerId=" + allocatedContainer.getId() + ", containerNode=" + allocatedContainer.getNodeId() + ", containerNodeURI=" + allocatedContainer.getNodeHttpAddress() + ", containerResourceMemory" + allocatedContainer.getResource().getMemory() + ", priority" + allocatedContainer.getPriority());
-        // + ", containerToken" + allocatedContainer.getContainerToken().getIdentifier().toString());
+          LOG.info("Got new container." + ", containerId=" + allocatedContainer.getId() + ", containerNode=" + allocatedContainer.getNodeId() + ", containerNodeURI=" + allocatedContainer.getNodeHttpAddress() + ", containerResourceMemory" + allocatedContainer.getResource().getMemory() + ", priority" + allocatedContainer.getPriority());
+          // + ", containerToken" +
+          // allocatedContainer.getContainerToken().getIdentifier().toString());
 
-        boolean alreadyAllocated = true;
-        StreamingContainerAgent.ContainerStartRequest csr = null;
-        for (Map.Entry<StreamingContainerAgent.ContainerStartRequest, MutablePair<Integer, ContainerRequest>> entry : requestedResources.entrySet()) {
-          if (entry.getKey().container.getResourceRequestPriority() == allocatedContainer.getPriority().getPriority()) {
-            alreadyAllocated = false;
-            csr = entry.getKey();
-            break;
+          boolean alreadyAllocated = true;
+          StreamingContainerAgent.ContainerStartRequest csr = null;
+          for (Map.Entry<StreamingContainerAgent.ContainerStartRequest, MutablePair<Integer, ContainerRequest>> entry : requestedResources.entrySet()) {
+            if (entry.getKey().container.getResourceRequestPriority() == allocatedContainer.getPriority().getPriority()) {
+              alreadyAllocated = false;
+              csr = entry.getKey();
+              break;
+            }
+          }
+
+          if (alreadyAllocated) {
+            LOG.info("Releasing {} as resource with priority {} was already assigned", allocatedContainer.getId(), allocatedContainer.getPriority());
+            releasedContainers.add(allocatedContainer.getId());
+            numReleasedContainers++;
+            numRequestedContainers++;
+            continue;
+          }
+          if (csr != null) {
+            requestedResources.remove(csr);
+          }
+
+          // allocate resource to container
+          ContainerResource resource = new ContainerResource(allocatedContainer.getPriority().getPriority(), allocatedContainer.getId().toString(), allocatedContainer.getNodeId().toString(), allocatedContainer.getResource().getMemory(), allocatedContainer.getResource().getVirtualCores(), allocatedContainer.getNodeHttpAddress());
+          StreamingContainerAgent sca = dnmgr.assignContainer(resource, null);
+
+          if (sca == null) {
+            // allocated container no longer needed, add release request
+            LOG.warn("Container {} allocated but nothing to deploy, going to release this container.", allocatedContainer.getId());
+            releasedContainers.add(allocatedContainer.getId());
+          } else {
+            // allocatedContainer.getNodeId() ==
+            AllocatedContainer allocatedContainerHolder = new AllocatedContainer(allocatedContainer);
+            this.allocatedContainers.put(allocatedContainer.getId().toString(), allocatedContainerHolder);
+            ByteBuffer tokens = null;
+            if (UserGroupInformation.isSecurityEnabled()) {
+              UserGroupInformation ugi = UserGroupInformation.getLoginUser();
+              Token<StramDelegationTokenIdentifier> delegationToken = allocateDelegationToken(ugi.getUserName(), heartbeatListener.getAddress());
+              allocatedContainerHolder.delegationToken = delegationToken;
+              // ByteBuffer tokens =
+              // LaunchContainerRunnable.getTokens(delegationTokenManager,
+              // heartbeatListener.getAddress());
+              tokens = LaunchContainerRunnable.getTokens(ugi, delegationToken);
+            }
+            LaunchContainerRunnable launchContainer = new LaunchContainerRunnable(allocatedContainer, nmClient, sca, tokens);
+            // Thread launchThread = new Thread(runnableLaunchContainer);
+            // launchThreads.add(launchThread);
+            // launchThread.start();
+            launchContainer.run(); // communication with NMs is now async
+
+            // Add the hostnmae of container to blacklist to support anti-affinity of containers
+            blacklistAdditions.add(allocatedContainer.getNodeHttpAddress());
+            // record container start event
+            StramEvent ev = new StramEvent.StartContainerEvent(allocatedContainer.getId().toString(), allocatedContainer.getNodeId().toString());
+            ev.setTimestamp(timestamp);
+            dnmgr.recordEventAsync(ev);
           }
         }
 
-        if (alreadyAllocated) {
-          LOG.info("Releasing {} as resource with priority {} was already assigned", allocatedContainer.getId(), allocatedContainer.getPriority());
-          releasedContainers.add(allocatedContainer.getId());
-          numReleasedContainers++;
-          numRequestedContainers++;
-          continue;
-        }
-        if (csr != null) {
-          requestedResources.remove(csr);
-        }
+        // track node updates for future locality constraint allocations
+        // TODO: it seems 2.0.4-alpha doesn't give us any updates
+        resourceRequestor.updateNodeReports(amResp.getUpdatedNodes());
 
-        // allocate resource to container
-        ContainerResource resource = new ContainerResource(allocatedContainer.getPriority().getPriority(), allocatedContainer.getId().toString(), allocatedContainer.getNodeId().toString(), allocatedContainer.getResource().getMemory(), allocatedContainer.getResource().getVirtualCores(), allocatedContainer.getNodeHttpAddress());
-        StreamingContainerAgent sca = dnmgr.assignContainer(resource, null);
+        // Check the completed containers
+        List<ContainerStatus> completedContainers = amResp.getCompletedContainersStatuses();
+        // LOG.debug("Got response from RM for container ask, completedCnt=" +
+        // completedContainers.size());
+        for (ContainerStatus containerStatus : completedContainers) {
+          LOG.info("Completed containerId=" + containerStatus.getContainerId() + ", state=" + containerStatus.getState() + ", exitStatus=" + containerStatus.getExitStatus() + ", diagnostics=" + containerStatus.getDiagnostics());
 
-        if (sca == null) {
-          // allocated container no longer needed, add release request
-          LOG.warn("Container {} allocated but nothing to deploy, going to release this container.", allocatedContainer.getId());
-          releasedContainers.add(allocatedContainer.getId());
-        }
-        else {
-          AllocatedContainer allocatedContainerHolder = new AllocatedContainer(allocatedContainer);
-          this.allocatedContainers.put(allocatedContainer.getId().toString(), allocatedContainerHolder);
-          ByteBuffer tokens = null;
-          if (UserGroupInformation.isSecurityEnabled()) {
+          // non complete containers should not be here
+          assert (containerStatus.getState() == ContainerState.COMPLETE);
+
+          AllocatedContainer allocatedContainer = allocatedContainers.remove(containerStatus.getContainerId().toString());
+          if (allocatedContainer != null && allocatedContainer.delegationToken != null) {
             UserGroupInformation ugi = UserGroupInformation.getLoginUser();
-            Token<StramDelegationTokenIdentifier> delegationToken = allocateDelegationToken(ugi.getUserName(), heartbeatListener.getAddress());
-            allocatedContainerHolder.delegationToken = delegationToken;
-            //ByteBuffer tokens = LaunchContainerRunnable.getTokens(delegationTokenManager, heartbeatListener.getAddress());
-            tokens = LaunchContainerRunnable.getTokens(ugi, delegationToken);
+            delegationTokenManager.cancelToken(allocatedContainer.delegationToken, ugi.getUserName());
           }
-          LaunchContainerRunnable launchContainer = new LaunchContainerRunnable(allocatedContainer, nmClient, sca, tokens);
-          // Thread launchThread = new Thread(runnableLaunchContainer);
-          // launchThreads.add(launchThread);
-          // launchThread.start();
-          launchContainer.run(); // communication with NMs is now async
+          int exitStatus = containerStatus.getExitStatus();
+          if (0 != exitStatus) {
+            if (allocatedContainer != null) {
+              numFailedContainers.incrementAndGet();
+            }
+            // if (exitStatus == 1) {
+            // // non-recoverable StreamingContainer failure
+            // appDone = true;
+            // finalStatus = FinalApplicationStatus.FAILED;
+            // dnmgr.shutdownDiagnosticsMessage = "Unrecoverable failure " +
+            // containerStatus.getContainerId();
+            // LOG.info("Exiting due to: {}", dnmgr.shutdownDiagnosticsMessage);
+            // }
+            // else {
+            // Recoverable failure or process killed (externally or via stop
+            // request by AM)
+            // also occurs when a container was released by the application but
+            // never assigned/launched
+            LOG.debug("Container {} failed or killed.", containerStatus.getContainerId());
+            dnmgr.scheduleContainerRestart(containerStatus.getContainerId().toString());
+            // }
+          } else {
+            // container completed successfully
+            numCompletedContainers.incrementAndGet();
+            LOG.info("Container completed successfully." + ", containerId=" + containerStatus.getContainerId());
+          }
 
-          // record container start event
-          StramEvent ev = new StramEvent.StartContainerEvent(allocatedContainer.getId().toString(), allocatedContainer.getNodeId().toString());
-          ev.setTimestamp(timestamp);
+          String containerIdStr = containerStatus.getContainerId().toString();
+          dnmgr.removeContainerAgent(containerIdStr);
+
+          // record container stop event
+          StramEvent ev = new StramEvent.StopContainerEvent(containerIdStr, containerStatus.getExitStatus());
+          ev.setReason(containerStatus.getDiagnostics());
           dnmgr.recordEventAsync(ev);
         }
-      }
-
-      // track node updates for future locality constraint allocations
-      // TODO: it seems 2.0.4-alpha doesn't give us any updates
-      resourceRequestor.updateNodeReports(amResp.getUpdatedNodes());
-
-      // Check the completed containers
-      List<ContainerStatus> completedContainers = amResp.getCompletedContainersStatuses();
-      // LOG.debug("Got response from RM for container ask, completedCnt=" + completedContainers.size());
-      for (ContainerStatus containerStatus : completedContainers) {
-        LOG.info("Completed containerId=" + containerStatus.getContainerId() + ", state=" + containerStatus.getState() + ", exitStatus=" + containerStatus.getExitStatus() + ", diagnostics=" + containerStatus.getDiagnostics());
-
-        // non complete containers should not be here
-        assert (containerStatus.getState() == ContainerState.COMPLETE);
-
-        AllocatedContainer allocatedContainer = allocatedContainers.remove(containerStatus.getContainerId().toString());
-        if (allocatedContainer != null && allocatedContainer.delegationToken != null) {
-          UserGroupInformation ugi = UserGroupInformation.getLoginUser();
-          delegationTokenManager.cancelToken(allocatedContainer.delegationToken, ugi.getUserName());
-        }
-        int exitStatus = containerStatus.getExitStatus();
-        if (0 != exitStatus) {
-          if (allocatedContainer != null) {
-            numFailedContainers.incrementAndGet();
-          }
-//          if (exitStatus == 1) {
-//            // non-recoverable StreamingContainer failure
-//            appDone = true;
-//            finalStatus = FinalApplicationStatus.FAILED;
-//            dnmgr.shutdownDiagnosticsMessage = "Unrecoverable failure " + containerStatus.getContainerId();
-//            LOG.info("Exiting due to: {}", dnmgr.shutdownDiagnosticsMessage);
-//          }
-//          else {
-          // Recoverable failure or process killed (externally or via stop request by AM)
-          // also occurs when a container was released by the application but never assigned/launched
-          LOG.debug("Container {} failed or killed.", containerStatus.getContainerId());
-          dnmgr.scheduleContainerRestart(containerStatus.getContainerId().toString());
-//          }
-        }
-        else {
-          // container completed successfully
-          numCompletedContainers.incrementAndGet();
-          LOG.info("Container completed successfully." + ", containerId=" + containerStatus.getContainerId());
-        }
-
-        String containerIdStr = containerStatus.getContainerId().toString();
-        dnmgr.removeContainerAgent(containerIdStr);
-
-        // record container stop event
-        StramEvent ev = new StramEvent.StopContainerEvent(containerIdStr, containerStatus.getExitStatus());
-        ev.setReason(containerStatus.getDiagnostics());
-        dnmgr.recordEventAsync(ev);
       }
 
       if (dnmgr.forcedShutdown) {
@@ -927,6 +957,40 @@ public class StreamingAppMasterService extends CompositeService
     }
 
     finishApplication(finalStatus, numTotalContainers);
+  }
+
+  private void sortRequestsSetBySize(List<Set<ContainerStartRequest>> containerRequestsSet)
+  {
+    // Sort containerRequestsSet by size
+    Collections.sort(containerRequestsSet, new Comparator<Set<?>>() {
+
+      @Override
+      public int compare(Set<?> o1, Set<?> o2)
+      {
+        return Integer.valueOf(o1.size()).compareTo(o2.size());
+      }
+    });
+  }
+
+  /*
+   * Separates list of container requests into multiple sets as per anti-affinity specified in container
+   */
+  private List<Set<ContainerStartRequest>> partitionRequestsWithAntiAffinity(Map<String, List<ContainerStartRequest>> operatorNameToRequestMapping, Set<ContainerStartRequest> containerStartRequests)
+  {
+    List<Set<ContainerStartRequest>> partitions = new LinkedList<Set<ContainerStartRequest>>();
+    Set<ContainerStartRequest> newPartition = new HashSet<ContainerStartRequest>();
+    for (ContainerStartRequest request : containerStartRequests) {
+      if (request.container.getAntiAffinityOperators() != null) {
+        for(String operator : request.container.getAntiAffinityOperators()) {
+          if(containerStartRequests.contains(operatorNameToRequestMapping.get(operator).get(0))) {
+            newPartition.addAll(operatorNameToRequestMapping.get(operator));
+            partitions.addAll(partitionRequestsWithAntiAffinity(operatorNameToRequestMapping, newPartition));
+            containerStartRequests.removeAll(operatorNameToRequestMapping.get(operator));
+          }
+        }
+      }
+    }
+    return partitions;
   }
 
   private void finishApplication(FinalApplicationStatus finalStatus, int numTotalContainers) throws YarnException, IOException

@@ -31,7 +31,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-
 import com.datatorrent.api.Context.OperatorContext;
 import com.datatorrent.api.Context.PortContext;
 import com.datatorrent.api.*;
@@ -41,7 +40,6 @@ import com.datatorrent.api.Partitioner.Partition;
 import com.datatorrent.api.Partitioner.PartitionKeys;
 import com.datatorrent.api.StatsListener.OperatorRequest;
 import com.datatorrent.api.annotation.Stateless;
-
 import com.datatorrent.common.util.AsyncFSStorageAgent;
 import com.datatorrent.netlet.util.DTThrowable;
 import com.datatorrent.stram.Journal.Recoverable;
@@ -495,6 +493,17 @@ public class PhysicalPlan implements Serializable
     }
     int memoryMB = pOperator.getOperatorMeta().getValue(OperatorContext.MEMORY_MB) + upStreamUnifierMemory;
     container.setRequiredMemoryMB(container.getRequiredMemoryMB() + memoryMB);
+    List<String> antiAffinityOperators = pOperator.getOperatorMeta().getValue(OperatorContext.ANTI_AFFINITY);
+    container.setAntiAffinityOperators(antiAffinityOperators);
+    // Check if operarors specified with anti-affinity are part of the inline operators in container
+    // In this case it will never be possible to honor anti-affinity, since inline operators are part of the same container
+    for(PTOperator operator : container.getOperators()) {
+      if(antiAffinityOperators.contains(operator.getName())) {
+        // TODO: Check what message makes sense
+        // TODO: Check if this can be caught earlier, in dag validation itself
+        throw new IllegalArgumentException("Inline operators are requested to be allocated with anti-affinity. Contradicting requirements");
+      }
+    }
   }
 
   private void updateContainerMemoryWithBufferServer(PTContainer container)

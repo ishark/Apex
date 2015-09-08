@@ -1178,6 +1178,7 @@ public class StreamingContainerManager implements PlanContext
     public final int memoryMB;
     public final int vCores;
     public final int priority;
+    public List<String> anti_affinity_operators;
     public final String nodeHttpAddress;
 
     public ContainerResource(int priority, String containerId, String host, int memoryMB, int vCores, String nodeHttpAddress)
@@ -1189,6 +1190,17 @@ public class StreamingContainerManager implements PlanContext
       this.priority = priority;
       this.nodeHttpAddress = nodeHttpAddress;
 
+    }
+
+    public ContainerResource(int priority, String containerId, String host, int memoryMB, int vCores, String nodeHttpAddress, List<String> anti_affinity_operators)
+    {
+      this.containerId = containerId;
+      this.host = host;
+      this.memoryMB = memoryMB;
+      this.vCores = vCores;
+      this.priority = priority;
+      this.nodeHttpAddress = nodeHttpAddress;
+      this.anti_affinity_operators= anti_affinity_operators;
     }
 
     /**

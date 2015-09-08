@@ -16,6 +16,7 @@
 package com.datatorrent.api;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -290,6 +291,11 @@ public interface Context
      */
     Attribute<AutoMetric.DimensionsScheme> METRICS_DIMENSIONS_SCHEME = new Attribute<AutoMetric.DimensionsScheme>(new
       Object2String<AutoMetric.DimensionsScheme>());
+
+    /**
+     * Attribute of the operator that tells the platform to allocate this operator on different nodes than specified operators
+     */
+    Attribute<List<String>> ANTI_AFFINITY = new Attribute<List<String>>(new ArrayList<String>(), (StringCodec<List<String>>)(new Object2String<List<String>>()));
 
     /**
      * Return the operator runtime id.

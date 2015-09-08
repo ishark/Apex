@@ -17,6 +17,7 @@ package com.datatorrent.stram.plan.physical;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 import com.esotericsoftware.kryo.KryoException;
@@ -88,6 +89,12 @@ public class PTContainer implements java.io.Serializable
           c.allocatedMemoryMB = in.readInt();
           c.requiredVCores = in.readInt();
           c.allocatedVCores = in.readInt();
+          // Anti-affinity operators
+          int antiAffinityOpCount= in.readInt();
+          c.antiAffinityOperators = new LinkedList<String>();
+          for(int i = 0; i < antiAffinityOpCount; i++) {
+            c.antiAffinityOperators.add(in.readString());
+          }
           String bufferServerHost = in.readString();
           if (bufferServerHost != null) {
             c.bufferServerAddress = InetSocketAddress.createUnresolved(bufferServerHost, in.readInt());
@@ -123,6 +130,11 @@ public class PTContainer implements java.io.Serializable
       out.writeInt(container.getRequiredVCores());
       // vcores allocated
       out.writeInt(container.getAllocatedVCores());
+      // Anti-affinity operators
+      out.writeInt(container.getAntiAffinityOperators().size());
+      for(String operatorName : container.getAntiAffinityOperators()) {
+        out.writeString(operatorName);
+      }
       // buffer server address
       InetSocketAddress addr = container.bufferServerAddress;
       if (addr != null) {
@@ -147,7 +159,7 @@ public class PTContainer implements java.io.Serializable
   private int resourceRequestPriority;
   private int requiredVCores;
   private int allocatedVCores;
-
+  private List<String> antiAffinityOperators;
   private final PhysicalPlan plan;
   private final int seq;
   List<PTOperator> operators = new ArrayList<PTOperator>();
@@ -292,5 +304,15 @@ public class PTContainer implements java.io.Serializable
         append("state", this.getState()).
         append("operators", this.operators).
         toString();
+  }
+
+  public List<String> getAntiAffinityOperators()
+  {
+    return antiAffinityOperators;
+  }
+
+  public void setAntiAffinityOperators(List<String> antiAffinityOperators)
+  {
+    this.antiAffinityOperators = antiAffinityOperators;
   }
 }
