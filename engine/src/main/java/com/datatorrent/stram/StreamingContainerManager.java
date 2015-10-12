@@ -1040,15 +1040,31 @@ public class StreamingContainerManager implements PlanContext
         Iterator<Map.Entry<Long, Set<PTOperator>>> it = shutdownOperators.entrySet().iterator();
         while (it.hasNext()) {
           Map.Entry<Long, Set<PTOperator>> windowAndOpers = it.next();
-          if (windowAndOpers.getKey().longValue() > this.committedWindowId) {
-            // wait until window is committed
-            continue;
-          } else {
+          if (windowAndOpers.getKey().longValue() >= this.committedWindowId) {
             LOG.info("Removing inactive operators at window {} {}", Codec.getStringWindowId(windowAndOpers.getKey()), windowAndOpers.getValue());
             for (PTOperator oper : windowAndOpers.getValue()) {
               plan.removeTerminatedPartition(oper);
             }
             it.remove();
+          } else {
+            boolean canRemoveOperator = true;
+            // Check if all downStream operators are at higher window Ids, then operator can be removed from dag
+            Set<PTOperator> downStreamOperators = getPhysicalPlan().getDependents(windowAndOpers.getValue());
+            for (PTOperator oper : downStreamOperators) {
+              long windowId = oper.stats.currentWindowId.get();
+              if (windowId < windowAndOpers.getKey().longValue()) {
+                canRemoveOperator = false;
+                break;
+              }
+            }
+            if (canRemoveOperator) {
+              LOG.info("Removing inactive operators at window {} {}", Codec.getStringWindowId(windowAndOpers.getKey()), windowAndOpers.getValue());
+              for (PTOperator oper : windowAndOpers.getValue()) {
+                plan.removeTerminatedPartition(oper);
+              }
+            } else {
+              continue;
+            }
           }
         }
       }
@@ -1070,8 +1086,7 @@ public class StreamingContainerManager implements PlanContext
       try {
         command.run();
         count++;
-      }
-      catch (Exception e) {
+      } catch (Exception e) {
         // TODO: handle error
         LOG.error("Failed to execute {}", command, e);
       }
@@ -1081,8 +1096,7 @@ public class StreamingContainerManager implements PlanContext
     if (count > 0) {
       try {
         checkpoint();
-      }
-      catch (Exception e) {
+      } catch (Exception e) {
         throw new RuntimeException("Failed to checkpoint state.", e);
       }
     }
@@ -1498,7 +1512,6 @@ public class StreamingContainerManager implements PlanContext
     boolean containerIdle = true;
 
     for (OperatorHeartbeat shb : heartbeat.getContainerStats().operators) {
-
       long maxEndWindowTimestamp = 0;
 
       reportedOperators.add(shb.nodeId);
@@ -1743,8 +1756,9 @@ public class StreamingContainerManager implements PlanContext
 
     ContainerHeartbeatResponse rsp = getHeartbeatResponse(sca);
 
-    if (containerIdle && isApplicationIdle()) {
-      LOG.info("requesting idle shutdown for container {}", heartbeat.getContainerId());
+//    if (containerIdle && isApplicationIdle()) {
+    if(heartbeat.getContainerStats().operators.isEmpty() && isApplicationIdle() && containerIdle) {
+      LOG.info("requesting shutdown for container {}", heartbeat.getContainerId());
       rsp.shutdown = true;
     }
     else {
